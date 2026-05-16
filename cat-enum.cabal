@@ -1,0 +1,78 @@
+cabal-version:      3.0
+-- The cabal-version field refers to the version of the .cabal specification,
+-- and can be different from the cabal-install (the tool) version and the
+-- Cabal (the library) version you are using. As such, the Cabal (the library)
+-- version used must be equal or greater than the version stated in this field.
+-- Starting from the specification version 2.2, the cabal-version field must be
+-- the first thing in the cabal file.
+
+name:               cat-enum
+version:            0.1.0.0
+synopsis:           Exact enumeration experiments for finite categories
+description:        Pure Haskell finite-category enumeration and classification tools.
+category:           Math
+license:            BSD-3-Clause
+license-file:       LICENSE
+maintainer:         not-specified
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md, notes.md, README.md
+
+common warnings
+    ghc-options: -Wall
+
+common deps
+    build-depends:
+        base ^>=4.18.3.0,
+        containers >=0.6 && <0.9,
+        csp >=1.4 && <1.5,
+        directory >=1.3 && <1.4,
+        filepath >=1.4 && <1.6,
+        nauty-parser >=1.0 && <1.1,
+        optparse-applicative >=0.18 && <0.20,
+        text >=2.0 && <2.2,
+        vector >=0.13 && <0.14
+
+library
+    import:           warnings, deps
+    exposed-modules:
+        CodexSlop.Biconnected
+        CodexSlop.CLI
+        CodexSlop.Canonical
+        CodexSlop.Category
+        CodexSlop.Copresheaf
+        CodexSlop.CspSearch
+        CodexSlop.Decompose
+        CodexSlop.Generate
+        CodexSlop.Group
+        CodexSlop.Profunctor
+        CodexSlop.Search
+        CodexSlop.Shape
+        CodexSlop.Thin
+    hs-source-dirs:   src
+    default-language: Haskell2010
+
+executable cat-enum
+    import:           warnings
+    main-is:          Main.hs
+    hs-source-dirs:   app
+    build-depends:
+        base ^>=4.18.3.0,
+        cat-enum
+    default-language: Haskell2010
+
+test-suite cat-enum-test
+    import:           warnings
+    type:             exitcode-stdio-1.0
+    main-is:          Test.hs
+    hs-source-dirs:   test
+    build-depends:
+        base ^>=4.18.3.0,
+        containers >=0.6 && <0.9,
+        cat-enum,
+        csp >=1.4 && <1.5,
+        nauty-parser >=1.0 && <1.1,
+        tasty >=1.5 && <1.6,
+        tasty-hunit >=0.10 && <0.11,
+        text >=2.0 && <2.2,
+        vector >=0.13 && <0.14
+    default-language: Haskell2010

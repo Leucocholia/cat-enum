@@ -1,0 +1,14 @@
+# Cabal build artifacts
+dist-newstyle/
+.cabal-sandbox/
+cabal.sandbox.config
+*.hi
+*.o
+*.dyn_o
+*.dyn_hi
+
+# Scratch files and experiments
+.compile-work/
+
+# Cache directories
+.cat-enum-cache/

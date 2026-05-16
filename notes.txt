@@ -1,0 +1,8 @@
+Classify categories by congruences and ideals (quotients and subobjects of the id profunctor)
+Classify categories by center and trace (end and coend of hom)
+Classify categories by their underlying quiver or preorder
+Use something easy to compute like SP posets
+Perhaps break down categories to those enriched over a simpler base
+Use the theorem that a category D enriched over [C, Set] is equivalent to a functor from C to the category of the category with Ob(D) as its object-set
+Use the theorem that the enrichment functor takes weighted colimits of bases to fiber products of categories enriched over them
+Definitely read Counting finite categories by Cruttwell
