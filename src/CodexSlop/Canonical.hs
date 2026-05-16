@@ -11,7 +11,7 @@ module CodexSlop.Canonical
 import CodexSlop.Category
 
 import Data.Bits (xor)
-import Data.List (permutations, sort)
+import Data.List (foldl', permutations, sort)
 import qualified Data.Set as Set
 import qualified Data.Vector as V
 import Data.Word (Word64)
@@ -66,60 +66,47 @@ concatBlocks blockLookup k oldForNew =
 equalityCount :: FiniteCategory -> Int
 equalityCount cat
   | k <= 1 = 1
-  | otherwise = Set.size $ Set.fromList
-      [ hashPermutation cat objectOrder blockVec
-      | objectOrder <- permutations [0 .. k - 1]
-      , let blockVec = concatBlocks blockLookup k objectOrder
-      ]
+  | otherwise =
+      let classes = objectClasses cat
+          aut = product (map factorial classes)
+      in foldl' (*) 1 [k - i | i <- [0 .. k - 1]] `div` aut
   where
     k = fcObjectCount cat
     n = fcMorphismCount cat
-    blockLookup =
-      V.fromList
-        [ V.fromList
-            [ m
-            | m <- [0 .. n - 1]
-            , fcSources cat V.! m == s
-            , fcTargets cat V.! m == t
-            ]
-        | s <- [0 .. k - 1]
-        , t <- [0 .. k - 1]
-        ]
 
-hashPermutation :: FiniteCategory -> [Int] -> V.Vector Int -> Word64
-hashPermutation cat oldForNew newToOldVec =
-  hashSources `xor` hashTargets `xor` hashIdentities `xor` hashCompose
+factorial :: Int -> Int
+factorial n = foldl' (*) 1 [1 .. n]
+
+-- | Partition objects into equivalence classes under the relation:
+-- two objects are equivalent iff swapping them preserves all hom-counts.
+-- Under Option A (morphisms within hom-sets indistinguishable), this is
+-- exactly the automorphism group under object permutations.
+objectClasses :: FiniteCategory -> [Int]
+objectClasses cat =
+  map length (go (Set.fromList [0 .. k - 1]) [])
   where
-    n = fcMorphismCount cat
     k = fcObjectCount cat
-    srcVec = fcSources cat
-    tgtVec = fcTargets cat
-    idVec = fcIdentities cat
-    oldToNew = V.fromList (invert n (V.toList newToOldVec))
-    oldObjectToNew = V.fromList (invert k oldForNew)
-    fnvOffset = 14695981039346656037 :: Word64
-    fnvPrime = 1099511628211 :: Word64
+    go remaining acc
+      | Set.null remaining = reverse acc
+      | otherwise =
+          let x = Set.findMin remaining
+              cls = Set.filter (sameClass x) remaining
+          in go (Set.difference remaining cls) (Set.toList cls : acc)
 
-    hashSources = goSrc 0 fnvOffset
-      where goSrc i h | i >= n = h
-                      | otherwise = goSrc (i+1) ((h `xor` fromIntegral (oldObjectToNew V.! (srcVec V.! (newToOldVec V.! i)))) * fnvPrime)
+    sameClass i j =
+      hCount i i == hCount j j
+      && all (\t -> t /= i && t /= j ==> hCount i t == hCount j t && hCount t i == hCount t j) [0 .. k - 1]
 
-    hashTargets = goTgt 0 fnvOffset
-      where goTgt i h | i >= n = h
-                      | otherwise = goTgt (i+1) ((h `xor` fromIntegral (oldObjectToNew V.! (tgtVec V.! (newToOldVec V.! i)))) * fnvPrime)
+    hCount s t =
+      length [f | f <- [0 .. fcMorphismCount cat - 1]
+                , fcSources cat V.! f == s
+                , fcTargets cat V.! f == t
+                ]
 
-    hashIdentities = goId 0 fnvOffset
-      where goId i h | i >= k = h
-                     | otherwise = goId (i+1) ((h `xor` fromIntegral (oldToNew V.! (idVec V.! (oldForNew !! i)))) * fnvPrime)
-
-    hashCompose = goComp 0 0 fnvOffset
-      where goComp f g h
-              | f >= n = h
-              | g >= n = goComp (f+1) 0 h
-              | otherwise =
-                  let result = composeAt cat (newToOldVec V.! f) (newToOldVec V.! g)
-                      v = if result < 0 then 0 else fromIntegral (oldToNew V.! result) + 1
-                  in goComp f (g+1) ((h `xor` v) * fnvPrime)
+infixr 0 ==>
+(==>) :: Bool -> Bool -> Bool
+True  ==> x = x
+False ==> _ = True
 
 canonicalKey :: FiniteCategory -> String
 canonicalKey cat

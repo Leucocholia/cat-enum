@@ -6,6 +6,7 @@ import CodexSlop.Category
 import CodexSlop.Copresheaf
 import CodexSlop.CspSearch
 import CodexSlop.Decompose
+import CodexSlop.Enrichment
 import CodexSlop.Generate
 import CodexSlop.Group
 import CodexSlop.Profunctor
@@ -29,6 +30,7 @@ main =
       , biconnectedTests
       , canonicalTests
       , decompositionTests
+      , enrichmentTests
       , groupTests
       , cspSearchTests
       , generationTests
@@ -124,6 +126,27 @@ decompositionTests =
       case parseCategoryKey (canonicalKey cat) of
         Left err -> error err
         Right canonical -> decompositionSignature canonical
+
+enrichmentTests :: TestTree
+enrichmentTests =
+  testGroup
+    "enrichment"
+    [ testCase "Two-point support preorders count for k=2" $
+        length (enumerateTwo 2) @?= 4
+    , testCase "Two-point support preorders for k=3" $
+        length (enumerateTwo 3) @?= 29
+    , testCase "Cardinal matrices count for n=3,k=2" $
+        length (enumerateCardinal 3 2) @?= 4
+    , testCase "Cardinal matrices refine supports correctly for n=3,k=2" $ do
+        let combos = [(s, m) | s <- enumerateTwo 2, m <- refine s 3]
+        length combos @?= 4
+    , testCase "Invalid Two-enrichment (non-transitive) is rejected" $
+        validEnrichment (EnrichedCategory 2 (V.fromList [One, One, One, Zero]))
+          @?= False
+    , testCase "Valid Two-enrichment (transitive) passes" $
+        validEnrichment (EnrichedCategory 2 (V.fromList [One, Zero, Zero, One]))
+          @?= True
+    ]
 
 groupTests :: TestTree
 groupTests =

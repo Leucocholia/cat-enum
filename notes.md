@@ -547,3 +547,140 @@ Removing the large-`k` bottleneck requires computing the automorphism group
 brute‑forcing all `k!` permutations.  This would bring the per-category cost
 from O(k! × n²) down to O(k²).
 
+## Colimit–limit theorem for enrichment
+
+The functor `U(-)-Cat : Preord^op → CAT/Set` (sending a preorder P to the
+category of categories enriched over its underlying set) sends **all weighted
+colimits** in the locally-posetal 2-category Preord to weighted limits in
+CAT/Set.
+
+This theorem is already at work in the decomposition pipeline but is not yet
+fully exploited:
+
+- **Coproducts → pullbacks over Set.**  A category whose support is a
+  disjoint union of preorders factors over its connected components.
+  The `supportsFor` blowup algorithm (`Shape.supportsForUncached`) is a
+  concrete instance: a support preorder on k objects is decomposed into
+  a quotient poset on q classes plus a composition of k into q parts,
+  which is a colimit description.
+
+- **Pushouts → pullbacks.**  The glueing of biconnected components along
+  profunctor edges (the `generate` pipeline) can be understood as a
+  weighted colimit in Preord, dualising to a weighted limit in CAT/Set.
+  This suggests a systematic theory of "decomposition by profunctor
+  profiles" where the enumeration of categories over a complex support
+  is reduced to the enumeration over simpler supports and a limit
+  computation.
+
+A future optimisation: use the theorem to replace the brute-force
+`enumerateCardinal` filter with a limit computation over a decomposition
+of the Cardinal lattice, though the gains for ℕ with min are marginal
+since ℕ has no non-trivial colimit decompositions.
+
+The theorem is documented in `CodexSlop.Enrichment`.
+
+## Up-set lattice enrichment benchmarks
+
+We benchmarked enrichment over all 24 unlabeled posets on 1–4 elements
+(Equivalently: all distributive lattices J(P) of up-sets of such posets).
+For each lattice, we enumerated all valid J(P)-enriched categories for
+k = 2, 3 objects.
+
+### k = 2 (results for all lattices in <1ms)
+
+| |J(P)|| Candidates | Valid | Ratio | Poset P |
+|------|----------|-------|-------|
+| 2 | 4 | 4 | 100% | 1-element |
+| 3 | 9 | 9 | 100% | 2-chain |
+| 4 | 16 | 16 | 100% | 2-antichain, 3-chain+tail |
+| 5 | 25 | 25 | 100% | 3-element with 1 relation |
+| 6 | 36 | 36 | 100% | 3-element with 2 relations |
+| 8 | 64 | 64 | 100% | 3-antichain |
+| 9 | 81 | 81 | 100% | 4-element with 0–1 relations |
+| 10 | 100 | 100 | 100% | 4-element partially ordered |
+| 12 | 144 | 144 | 100% | 4-element with 2+ relations |
+| 16 | 256 | 256 | 100% | 4-antichain |
+
+For k = 2 the composition axiom is vacuous: with only two objects, no
+composable triple involves a non-identity cell twice.  All  2D0 candidate
+matrices pass.
+
+### k = 3 (selected results)
+
+| |J(P)|| Candidates | Valid | Time | Poset |
+|------|-----------|-------|------|------|
+| 2 | 64 | 29 | <1ms | 1-element (Two) |
+| 3 | 729 | 192 | <1ms | 2-chain |
+| 4 | 4096 | 730–841 | <1ms | 2-antichain, 3-chain |
+| 5 | 15625 | 2063–2168 | <1ms | 4-element sparse |
+| 6 | 46656 | 4854–5568 | 15–31s | 4-element, some ordering |
+| 7 | 117649 | 10096–10525 | 47–63s | 4-element, more ordering |
+| 8 | 262144 | 19763–24389 | 94–109s | 3-antichain, 4-element |
+| 9 | 531441 | 36864–37440 | 188–219s | 4-element mostly ordered |
+| 10 | 1M | 62872 | 328–391s | 4-element, 2 components |
+| 12 | 3M | 161472 | ~1060s | 4-element largely ordered |
+| 16 | 16.8M | 707281 | ~5920s | 4-antichain (Boolean) |
+
+### Key findings
+
+1. **The Two lattice (J(1)) is the ideal first layer.** It captures exactly
+   the support-preorder information (which hom-sets are nonempty) at
+   minimal cost: 64 candidates for k=3, <1ms.
+
+2. **Larger up-set lattices are exponentially more expensive.**
+   The candidate count grows as |J(P)|^(k²−k).  For the Boolean lattice
+   on 4 elements (|J(P)|=16), k=3 requires checking 16.8M candidates.
+
+3. **The composition-axiom filter ratio drops with lattice size.**
+   For m=2, 45% of candidates pass; for m=16, only 4% pass.  This means
+   the extra information from larger lattices comes at rapidly
+   diminishing returns.
+
+4. **The ideal pipeline is exactly what the code already does.**
+   - Layer 1: enrich over Two → support preorder (fast, 0ms)
+   - Layer 2: enrich over Cardinal → hom-count matrices (fast, 0ms)
+   - Layer 3: full Set composition table (the expensive but necessary step)
+
+   The up-set lattices J(P) for |P| > 1 are the wrong middle ground:
+   they are combinatorially more expensive than Two but don't provide
+   enough constraint to replace the Set layer.
+
+## Bug fixes (May 2026)
+
+### Level-shifting in skeleton canonical key
+
+`connectedSkeletonCanonicalKey` was trying ALL q! class permutations to
+find the minimum skeleton key.  This let distinct skeletons collide when
+a permutation of one skeleton matched another skeleton's minimum key.
+The consequence: categories with different component-to-class assignments
+(e.g., C₂ at class 0 with C₃ at class 1 vs C₃ at 0 with C₂ at 1) were
+deduplicated even though they are non-isomorphic.
+
+**Fix:** restrict permutations to only swap classes with identical
+component keys (`partitionByKey` + per-group permutations).  This
+recovered 164 missing isomorphism classes at (9,2) (114 → 278).
+
+### Undercounting in `smallExtraCauchyKeys` shortcut
+
+The shortcut was handling excess ≤ 4, but when it returned `Just`, the
+full skeleton-assembly pipeline was never called, masking gaps.  Also:
+- The distribution list was missing multi-object components (parallel
+  arrows).
+- Object counts were computed as `length dist` (number of components)
+  instead of `sum (fcObjectCount . snd)` (total objects in those
+  components).
+
+**Fix:** union shortcut results with the full pipeline.  Added parallel
+arrow categories to the distribution lists.  Fixed object counting.
+
+### Stale cache files
+
+0-byte cache files from cancelled partial runs were being reused by
+`cachedGeneratedKeys`, preventing fresh computations from running even
+after underlying bugs were fixed.
+
+**Fix:** delete 0-byte cache files before re-running.
+
+
+
+

@@ -15,6 +15,7 @@ module CodexSlop.Shape
 import Data.List (permutations)
 import qualified Data.Set as Set
 import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 
 data SupportPreorder = SupportPreorder
   { supportObjectCount :: !Int
@@ -260,80 +261,61 @@ labelledPosetRelationsUncached q
   | q <= 0 = [[]]
   | q == 1 = [[True]]
   | otherwise =
-      [ extendRelation old lower upper
+      [ VU.toList $ extendRelationVU oldV (q - 1) lower upper
       | old <- labelledPosetRelations (q - 1)
+      , let oldV = VU.fromList old
       , lower <- subsets [0 .. q - 2]
-      , isDownSet old lower
+      , isDownSetVU oldV (q - 1) lower
       , upper <- subsets [0 .. q - 2]
-      , isUpSet old upper
+      , isUpSetVU oldV (q - 1) upper
       , null (lower `intersectList` upper)
-      , all (\l -> all (relationAt old (q - 1) l) upper) lower
+      , all (\l -> all (\u -> oldV VU.! (l * (q - 1) + u)) upper) lower
       ]
 
-extendRelation :: [Bool] -> [Int] -> [Int] -> [Bool]
-extendRelation old lower upper =
-  [ cell i j
-  | i <- [0 .. q - 1]
-  , j <- [0 .. q - 1]
-  ]
+extendRelationVU :: VU.Vector Bool -> Int -> [Int] -> [Int] -> VU.Vector Bool
+extendRelationVU oldV oldK lower upper =
+  VU.generate (q * q) (\idx ->
+    let (i, j) = idx `divMod` q
+    in if i < oldK && j < oldK
+       then oldV VU.! (i * oldK + j)
+       else if i == oldK && j == oldK then True
+       else if j == oldK then i `elem` lower
+       else if i == oldK then j `elem` upper
+       else False)
   where
-    q = relationSize old + 1
-    new = q - 1
-    cell i j
-      | i < new && j < new = relationAt old new i j
-      | i == new && j == new = True
-      | j == new = i `elem` lower
-      | i == new = j `elem` upper
-      | otherwise = False
+    q = oldK + 1
 
-isDownSet :: [Bool] -> [Int] -> Bool
-isDownSet relation xs =
-  all
-    ( \x ->
-        all
-          ( \y ->
-              not (relationAt relation k y x) || y `elem` xs
-          )
-          [0 .. k - 1]
-    )
-    xs
-  where
-    k = relationSize relation
+isDownSetVU :: VU.Vector Bool -> Int -> [Int] -> Bool
+isDownSetVU rel k xs =
+  let xsSet = Set.fromList xs
+  in all (\x -> all (\y -> not (rel VU.! (y * k + x)) || Set.member y xsSet) [0 .. k - 1]) xs
 
-isUpSet :: [Bool] -> [Int] -> Bool
-isUpSet relation xs =
-  all
-    ( \x ->
-        all
-          ( \y ->
-              not (relationAt relation k x y) || y `elem` xs
-          )
-          [0 .. k - 1]
-    )
-    xs
-  where
-    k = relationSize relation
+isUpSetVU :: VU.Vector Bool -> Int -> [Int] -> Bool
+isUpSetVU rel k xs =
+  let xsSet = Set.fromList xs
+  in all (\x -> all (\y -> not (rel VU.! (x * k + y)) || Set.member y xsSet) [0 .. k - 1]) xs
 
 blowUpRelation :: [Bool] -> [Int] -> [Bool]
 blowUpRelation quotient classSizes =
-  [ relationAt quotient q (classes !! i) (classes !! j)
-  | i <- [0 .. k - 1]
-  , j <- [0 .. k - 1]
-  ]
+  VU.toList $ VU.generate (k * k) (\idx ->
+    let (i, j) = idx `divMod` k
+    in quotVec VU.! (classesVec VU.! i * q + classesVec VU.! j))
   where
     q = length classSizes
-    classes = concat [replicate size classId | (classId, size) <- zip [0 ..] classSizes]
-    k = length classes
+    classesVec = VU.fromList $ concat [replicate size classId | (classId, size) <- zip [0 ..] classSizes]
+    quotVec = VU.fromList quotient
+    k = VU.length classesVec
 
 canonicalRelation :: Int -> [Bool] -> [Bool]
 canonicalRelation k relation =
-  minimum [permuteRelation p | p <- permutations [0 .. k - 1]]
+  VU.toList $ minimum $ map permuteVU (permutations [0 .. k - 1])
   where
-    permuteRelation p =
-      [ relationAt relation k (p !! i) (p !! j)
-      | i <- [0 .. k - 1]
-      , j <- [0 .. k - 1]
-      ]
+    relVec = VU.fromList relation
+    permuteVU p =
+      let pVec = VU.fromList p
+      in VU.generate (k * k) (\idx ->
+           let (i, j) = idx `divMod` k
+           in relVec VU.! (pVec VU.! i * k + pVec VU.! j))
 
 connectedRelation :: Int -> [Bool] -> Bool
 connectedRelation k relation

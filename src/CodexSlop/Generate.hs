@@ -18,7 +18,8 @@ import CodexSlop.Search
 import CodexSlop.Shape
 
 import Control.Monad (forM)
-import Data.List (intercalate, permutations, sort)
+import Data.Function (on)
+import Data.List (groupBy, intercalate, permutations, sort, sortBy)
 import qualified Data.Set as Set
 import qualified Data.Vector as V
 import System.Directory (createDirectoryIfMissing, doesFileExist)
@@ -93,26 +94,22 @@ componentGeneratedKeysCachedWith mode n objectFilter cauchyOnly = do
   where
     computeKeys smallExtraBlocks k
       | mode == UpToEquality = do
-          isoKeys <- cachedGeneratedKeys UpToIsomorphism n k cauchyOnly (isoComputeKeys smallExtraBlocks k)
+          isoKeys <- cachedGeneratedKeys UpToIsomorphism n k cauchyOnly (isoComputeKeysForMode UpToIsomorphism smallExtraBlocks k)
           let cats = [cat | key <- Set.toAscList isoKeys, Right cat <- [parseCategoryKey key]]
           pure (Set.unions (map allEqualityKeys cats))
-      | otherwise = isoComputeKeys smallExtraBlocks k
+      | otherwise = isoComputeKeysForMode mode smallExtraBlocks k
 
-    isoComputeKeys smallExtraBlocks k =
-      case smallExtraCauchyKeys mode n k cauchyOnly of
-        Just fastKeys -> pure fastKeys
-        Nothing
-          | Just fastKeys <- smallExtraCauchyKeysFromBlocks mode smallExtraBlocks n k cauchyOnly ->
-              pure fastKeys
-          | otherwise -> do
-              cats <- generatedCategoriesForObjectCountCached n k cauchyOnly
-              pure
-                ( Set.fromList
-                    [ representativeKey mode cat
-                    | cat <- cats
-                    , not cauchyOnly || isCauchyComplete cat
-                    ]
-                )
+    isoComputeKeysForMode :: RepresentativeMode -> [ConnectedBlock] -> Int -> IO (Set.Set String)
+    isoComputeKeysForMode repMode smallExtraBlocks k = do
+      shortcut <- case smallExtraCauchyKeys repMode n k cauchyOnly of
+                    Just keys -> pure keys
+                    Nothing   -> pure Set.empty
+      full <- case smallExtraCauchyKeysFromBlocks repMode smallExtraBlocks n k cauchyOnly of
+                Just keys -> pure keys
+                Nothing   -> do
+                  cats <- generatedCategoriesForObjectCountCached n k cauchyOnly
+                  pure (Set.fromList [representativeKey repMode cat | cat <- cats, not cauchyOnly || isCauchyComplete cat])
+      pure (Set.union shortcut full)
 
 equalityGeneratedCounts :: Int -> Maybe Int -> Bool -> IO [(Int, Int)]
 equalityGeneratedCounts n objectFilter cauchyOnly = do
@@ -124,14 +121,13 @@ equalityGeneratedCounts n objectFilter cauchyOnly = do
     pure (k, count)
   where
     isoComputeForCounts n' k' cauchyOnly' = do
-      cats <- generatedCategoriesForObjectCountCached n' k' cauchyOnly'
-      pure
-        ( Set.fromList
-            [ representativeKey UpToIsomorphism cat
-            | cat <- cats
-            , not cauchyOnly' || isCauchyComplete cat
-            ]
-        )
+      shortcut <- case smallExtraCauchyKeys UpToIsomorphism n' k' cauchyOnly' of
+                    Just keys -> pure keys
+                    Nothing   -> pure Set.empty
+      full <- do
+        cats <- generatedCategoriesForObjectCountCached n' k' cauchyOnly'
+        pure (Set.fromList [representativeKey UpToIsomorphism cat | cat <- cats, not cauchyOnly' || isCauchyComplete cat])
+      pure (Set.union shortcut full)
 
 defaultGeneratedMode :: Bool -> RepresentativeMode
 defaultGeneratedMode True = UpToEquivalence
@@ -203,9 +199,15 @@ connectedBlockMultisets blocks targetMorphisms targetObjects =
   where
     indexed = zip [0 :: Int ..] blocks
 
+    -- Smallest and largest morphism count per object among all blocks (for pruning)
+    minMorphsPerObj = minimum (map (\b -> cbMorphisms b `div` cbObjects b) blocks)
+    maxMorphsPerObj = maximum (map (\b -> (cbMorphisms b + cbObjects b - 1) `div` cbObjects b) blocks)
+
     assemble 0 0 _ = [[]]
     assemble remainingMorphisms remainingObjects start
       | remainingMorphisms <= 0 || remainingObjects <= 0 = []
+      | remainingMorphisms < remainingObjects * minMorphsPerObj = []
+      | remainingMorphisms > remainingObjects * maxMorphsPerObj = []
       | otherwise =
           [ cbCategory block : rest
           | (index, block) <- drop start indexed
@@ -223,35 +225,39 @@ smallExtraCauchyKeys mode morphisms objects cauchyOnly
   | not cauchyOnly = Nothing
   | objects < 1 = Just Set.empty
   | extra < 0 = Just Set.empty
-  | extra > 2 = Nothing
-  | otherwise =
-      Just
-        ( Set.fromList
-            [ representativeKey mode (disjointUnionCategory (component : replicate remaining terminalCategory))
-            | (component, componentObjects) <- oneComponentCases
-            , let remaining = objects - componentObjects
-            , remaining >= 0
-            ]
-            `Set.union`
-          Set.fromList
-            [ representativeKey mode (disjointUnionCategory (left : right : replicate remaining terminalCategory))
-            | extra == 2
-            , (i, (left, leftObjects)) <- indexedExtraOne
-            , (j, (right, rightObjects)) <- indexedExtraOne
-            , i <= j
-            , let remaining = objects - leftObjects - rightObjects
-            , remaining >= 0
-            ]
-        )
+  | extra > 4 = Nothing
+  | otherwise = Just $ Set.fromList
+      [ representativeKey mode (disjointUnionCategory (map snd dist ++ replicate remainingTerminals terminalCategory))
+      | dist <- extraDistributions extra
+      , let distObjects = sum (map (fcObjectCount . snd) dist)
+      , distObjects <= objects
+      , let remainingTerminals = objects - distObjects
+      , let totalMorphs = sum (map fst dist) + remainingTerminals
+      , totalMorphs == morphisms
+      ]
   where
     extra = morphisms - objects
-    oneComponentCases =
-      case extra of
-        0 -> [(terminalCategory, 1)]
-        1 -> extraOneConnected
-        2 -> extraTwoConnected
-        _ -> []
-    indexedExtraOne = zip [0 :: Int ..] extraOneConnected
+
+-- | All ways to distribute @e@ extra morphisms across distinct objects.
+-- Each distribution is a list of (morphismCount, category) pairs where
+-- a single object gets that many total morphisms (including its identity).
+extraDistributions :: Int -> [[(Int, FiniteCategory)]]
+extraDistributions 0 = [[]]
+extraDistributions 1 = [[(2, groupCategoryOfOrder 2)]
+                      , [(3, parallelArrowCategory 1)]]
+extraDistributions 2 = [[(3, groupCategoryOfOrder 3)], [(2, groupCategoryOfOrder 2), (2, groupCategoryOfOrder 2)]
+                      , [(4, parallelArrowCategory 2)]]
+extraDistributions 3 = [[(4, cat)] | cat <- finiteGroupCategories 4]
+                    ++ [[(3, groupCategoryOfOrder 3), (2, groupCategoryOfOrder 2)]]
+                    ++ [[(2, groupCategoryOfOrder 2), (2, groupCategoryOfOrder 2), (2, groupCategoryOfOrder 2)]]
+                    ++ [[(5, parallelArrowCategory 3)]]
+extraDistributions 4 = [[(5, cat)] | cat <- finiteGroupCategories 5]
+                    ++ [[(4, c4), (2, groupCategoryOfOrder 2)] | c4 <- finiteGroupCategories 4]
+                    ++ [[(3, groupCategoryOfOrder 3), (3, groupCategoryOfOrder 3)]]
+                    ++ [[(3, groupCategoryOfOrder 3), (2, groupCategoryOfOrder 2), (2, groupCategoryOfOrder 2)]]
+                    ++ [[(2, groupCategoryOfOrder 2), (2, groupCategoryOfOrder 2), (2, groupCategoryOfOrder 2), (2, groupCategoryOfOrder 2)]]
+                    ++ [[(6, parallelArrowCategory 4)]]
+extraDistributions _ = []
 
 terminalCategory :: FiniteCategory
 terminalCategory =
@@ -263,23 +269,6 @@ terminalCategory =
     , fcIdentities = V.singleton 0
     , fcCompose = V.singleton 0
     }
-
-extraOneConnected :: [(FiniteCategory, Int)]
-extraOneConnected =
-  [ (groupCategoryOfOrder 2, 1)
-  , (parallelArrowCategory 1, 2)
-  ]
-
-extraTwoConnected :: [(FiniteCategory, Int)]
-extraTwoConnected =
-  [ (groupCategoryOfOrder 3, 1)
-  , (parallelArrowCategory 2, 2)
-  , (oneWayGroupTerminalCategory True, 2)
-  , (oneWayGroupTerminalCategory False, 2)
-  , (twoObjectIsoGroupoid, 2)
-  , (thinCategory 3 [(0, 1), (0, 2)], 3)
-  , (thinCategory 3 [(0, 2), (1, 2)], 3)
-  ]
 
 groupCategoryOfOrder :: Int -> FiniteCategory
 groupCategoryOfOrder order =
@@ -319,90 +308,6 @@ parallelArrowCategory arrowCount =
       | f == 0 = g
       | g == 1 + arrowCount = f
       | otherwise = -1
-
-oneWayGroupTerminalCategory :: Bool -> FiniteCategory
-oneWayGroupTerminalCategory groupFirst =
-  categoryFromOneWayProfunctor component0 component1 True prof
-  where
-    group = groupCategoryOfOrder 2
-    component0 = if groupFirst then group else terminalCategory
-    component1 = if groupFirst then terminalCategory else group
-    prof =
-      FiniteProfunctor
-        { fpProfile = [1]
-        , fpLeftActions = V.replicate (fcMorphismCount component0) [0]
-        , fpRightActions = V.replicate (fcMorphismCount component1) [0]
-        }
-
-twoObjectIsoGroupoid :: FiniteCategory
-twoObjectIsoGroupoid =
-  FiniteCategory
-    { fcMorphismCount = 4
-    , fcObjectCount = 2
-    , fcSources = V.fromList [0, 0, 1, 1]
-    , fcTargets = V.fromList [0, 1, 0, 1]
-    , fcIdentities = V.fromList [0, 3]
-    , fcCompose =
-        V.fromList
-          [ compose f g
-          | f <- [0 .. 3]
-          , g <- [0 .. 3]
-          ]
-    }
-  where
-    source :: Int -> Int
-    source = ([0, 0, 1, 1] !!)
-    target :: Int -> Int
-    target = ([0, 1, 0, 1] !!)
-    compose f g
-      | target f /= source g = -1
-      | f == 0 || f == 3 = g
-      | g == 0 || g == 3 = f
-      | f == 1 && g == 2 = 0
-      | f == 2 && g == 1 = 3
-      | otherwise = -1
-
-thinCategory :: Int -> [(Int, Int)] -> FiniteCategory
-thinCategory objectCount comparablePairs =
-  FiniteCategory
-    { fcMorphismCount = length morphisms
-    , fcObjectCount = objectCount
-    , fcSources = V.fromList [source | (source, _) <- morphisms]
-    , fcTargets = V.fromList [target | (_, target) <- morphisms]
-    , fcIdentities =
-        V.fromList
-          [ morphismIndex (object, object)
-          | object <- [0 .. objectCount - 1]
-          ]
-    , fcCompose =
-        V.fromList
-          [ compose f g
-          | f <- [0 .. length morphisms - 1]
-          , g <- [0 .. length morphisms - 1]
-          ]
-    }
-  where
-    relation =
-      [ (object, object)
-      | object <- [0 .. objectCount - 1]
-      ]
-        ++ comparablePairs
-    morphisms =
-      [ (source, target)
-      | source <- [0 .. objectCount - 1]
-      , target <- [0 .. objectCount - 1]
-      , (source, target) `elem` relation
-      ]
-    morphismIndex pair =
-      case lookup pair (zip morphisms [0 ..]) of
-        Just index -> index
-        Nothing -> error "thin morphism missing"
-    compose f g =
-      let (_, middleLeft) = morphisms !! f
-          (middleRight, _) = morphisms !! g
-      in if middleLeft == middleRight
-           then morphismIndex (fst (morphisms !! f), snd (morphisms !! g))
-           else -1
 
 generatedCategoriesForObjectCount :: Int -> Int -> Bool -> [FiniteCategory]
 generatedCategoriesForObjectCount n objectCount cauchyOnly =
@@ -738,10 +643,19 @@ connectedSkeletonCanonicalKey :: GeneratedSkeleton -> String
 connectedSkeletonCanonicalKey skeleton =
   minimum
     [ skeletonKeyForPermutation skeleton p
-    | p <- permutations [0 .. q - 1]
+    | p <- admissiblePermutations
     ]
   where
     q = length (gsComponents skeleton)
+    compKeys = map categoryKey (gsComponents skeleton)
+    groups = partitionByKey compKeys
+    admissiblePermutations =
+      map concat (sequence (map permutations groups))
+
+-- | Partition indices by their value, preserving value-sorted order.
+partitionByKey :: Ord a => [a] -> [[Int]]
+partitionByKey keys =
+  map (map snd) $ groupBy (\x y -> fst x == fst y) $ sortBy (compare `on` fst) $ zip keys [0 ..]
 
 skeletonKeyForPermutation :: GeneratedSkeleton -> [Int] -> String
 skeletonKeyForPermutation skeleton oldForNewClass =

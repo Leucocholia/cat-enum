@@ -42,6 +42,7 @@ library
         CodexSlop.Copresheaf
         CodexSlop.CspSearch
         CodexSlop.Decompose
+        CodexSlop.Enrichment
         CodexSlop.Generate
         CodexSlop.Group
         CodexSlop.Profunctor
@@ -55,6 +56,45 @@ executable cat-enum
     import:           warnings
     main-is:          Main.hs
     hs-source-dirs:   app
+    build-depends:
+        base ^>=4.18.3.0,
+        cat-enum
+    default-language: Haskell2010
+
+executable bench-enrich
+    import:           warnings
+    main-is:          BenchEnrich.hs
+    hs-source-dirs:   bench
+    build-depends:
+        base ^>=4.18.3.0,
+        cat-enum
+    default-language: Haskell2010
+
+executable bench-upset
+    import:           warnings
+    main-is:          BenchUpSet.hs
+    hs-source-dirs:   bench
+    build-depends:
+        base ^>=4.18.3.0,
+        cat-enum,
+        vector >=0.13 && <0.14
+    default-language: Haskell2010
+
+executable bench-center
+    import:           warnings
+    main-is:          BenchCenter.hs
+    hs-source-dirs:   bench
+    build-depends:
+        base ^>=4.18.3.0,
+        cat-enum,
+        vector >=0.13 && <0.14,
+        containers >=0.6 && <0.9
+    default-language: Haskell2010
+
+executable profile
+    import:           warnings
+    main-is:          Profile.hs
+    hs-source-dirs:   bench
     build-depends:
         base ^>=4.18.3.0,
         cat-enum
