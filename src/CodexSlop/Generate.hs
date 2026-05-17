@@ -112,13 +112,24 @@ componentGeneratedKeysCachedWith dual mode n objectFilter cauchyOnly = do
 
 equalityGeneratedCounts :: Bool -> Int -> Maybe Int -> Bool -> IO [(Int, Int)]
 equalityGeneratedCounts dual n objectFilter cauchyOnly = do
+  createDirectoryIfMissing True eqCountCacheDir
   let requestedObjects = maybe [1 .. n] (:[]) objectFilter
   forM requestedObjects $ \k -> do
-    isoKeys <- cachedGeneratedKeys UpToIsomorphism n k cauchyOnly (isoComputeForCounts n k cauchyOnly)
-    let cats = [cat | key <- Set.toAscList isoKeys, Right cat <- [parseCategoryKey key]]
-        count = sum (map equalityCount cats)
+    count <- getEqCount n k cauchyOnly
     pure (k, count)
   where
+    getEqCount n' k' cauchyOnly' = do
+      let cacheFile = eqCountCacheFile n' k' cauchyOnly'
+      exists <- doesFileExist cacheFile
+      if exists
+        then read <$> readFile cacheFile
+        else do
+          isoKeys <- cachedGeneratedKeys UpToIsomorphism n' k' cauchyOnly' (isoComputeForCounts n' k' cauchyOnly')
+          let cats = [cat | key <- Set.toAscList isoKeys, Right cat <- [parseCategoryKey key]]
+              count = sum (map equalityCount cats)
+          writeFile cacheFile (show count)
+          pure count
+
     isoComputeForCounts n' k' cauchyOnly' = do
       shortcut <- case smallExtraCauchyKeys UpToIsomorphism n' k' cauchyOnly' of
                     Just keys -> pure keys
@@ -127,6 +138,13 @@ equalityGeneratedCounts dual n objectFilter cauchyOnly = do
         cats <- generatedCategoriesForObjectCountCached n' k' cauchyOnly'
         pure (Set.fromList [representativeKey UpToIsomorphism cat | cat <- cats, not cauchyOnly' || isCauchyComplete cat])
       pure (Set.union shortcut full)
+
+eqCountCacheDir :: FilePath
+eqCountCacheDir = ".cat-enum-cache" </> "v4" </> "equality-counts"
+
+eqCountCacheFile :: Int -> Int -> Bool -> FilePath
+eqCountCacheFile n k cauchyOnly =
+  eqCountCacheDir </> ("cauchy-" ++ boolName cauchyOnly ++ "-morphisms-" ++ show n ++ "-objects-" ++ show k ++ ".count")
 
 defaultGeneratedMode :: Bool -> RepresentativeMode
 defaultGeneratedMode True = UpToEquivalence
