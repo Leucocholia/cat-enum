@@ -10,7 +10,7 @@ module CodexSlop.Generate
 
 import CodexSlop.Biconnected
  -- add to import
-import CodexSlop.Canonical (RepresentativeMode(..), allEqualityKeys, dualKey, equalityCount, representativeKey, representativeModeName)
+import CodexSlop.Canonical (RepresentativeMode(..), allEqualityKeys, canonicalKey, dualKey, equalityCount, representativeKey, representativeModeName)
 import CodexSlop.Category
 import CodexSlop.Decompose (disjointUnionCategory, isConnectedCategory)
 import CodexSlop.Group (finiteGroupCategories)
@@ -325,37 +325,79 @@ dpAllCached maxN cauchyOnly = do
 
 buildDPTable :: Int -> Bool -> IO [[[FiniteCategory]]]
 buildDPTable maxN cauchyOnly = do
-  -- Step 1: connected categories via skeletons (only for n ≥ 2k-1)
+  -- Step 1: biconnected components from cache (the atoms)
+  bicompTable <- forM [0 .. maxN] $ \n ->
+    forM [0 .. n] $ \k -> do
+      if k == 0 || n < k then pure []
+      else concat . map snd <$> biconnectedCanonicalCategoriesCached n (Just k) cauchyOnly
+
+  -- Step 2: connected non-biconnected categories via skeletons
   connTable <- forM [0 .. maxN] $ \n ->
     forM [0 .. n] $ \k -> do
-      if k == 0 then pure []
-      else if n < k then pure []
-      else if n <= 2 * k - 2 then pure []
-      else generatedConnectedCached n k cauchyOnly
+      if k == 0 || n < k || n <= 2 * k - 2 then pure []
+      else do
+        -- Connected skeletons minus those already covered by biconnected
+        let bicompKeys = Set.fromList (map canonicalKey (bicompTable !! n !! k))
+        cats <- generatedConnectedCached n k cauchyOnly
+        pure (filter (\c -> not (Set.member (canonicalKey c) bicompKeys)) cats)
 
-  -- Step 2: DP convolution
-  -- all[n][k] = connected[n][k] ∪ ⋃ conn[n'][k'] × all[n-n'][k-k']
+  -- Step 3: DP — all[n][k] = bicomp[n][k] ∪ conn_nb[n][k] ∪ Σ glue(bicomp, all)
   let allTable = table
       table = [[ cell n k | k <- [0 .. n] ] | n <- [0 .. maxN] ]
       cell 0 0 = []
       cell n k
         | k <= 0 || k > n = []
         | otherwise =
-            let connected = connTable !! n !! k
-                glued = [ disjointUnionCategory [conn, rest]
+            let base = bicompTable !! n !! k ++ connTable !! n !! k
+                -- Try gluing a biconnected component onto an existing category
+                glued = [ gluedCat
                         | n1 <- [1 .. n - 1]
                         , k1 <- [1 .. min k n1]
-                        , let conns = connTable !! n1 !! k1
-                        , not (null conns)
-                        , conn <- conns
+                        , bicomp <- bicompTable !! n1 !! k1
                         , let n2 = n - n1
                         , let k2 = k - k1
-                        , k2 >= 0
                         , k2 <= n2
                         , rest <- table !! n2 !! k2
+                        , gluedCat <- tryGlueBicomp bicomp rest n cauchyOnly
                         ]
-            in connected ++ glued
+            in base ++ glued
   pure allTable
+
+-- | Try to glue a biconnected component onto a smaller category via profunctors.
+-- Returns all valid glued categories with exactly n total morphisms.
+-- For 1-object components, uses profunctor gluing; otherwise falls back
+-- to disjoint union (no cross-morphisms).
+tryGlueBicomp :: FiniteCategory -> FiniteCategory -> Int -> Bool -> [FiniteCategory]
+tryGlueBicomp bicomp rest totalMorphs cauchyOnly =
+  let n1 = fcMorphismCount bicomp
+      n2 = fcMorphismCount rest
+      base = n1 + n2
+      k1 = fcObjectCount bicomp
+      k2 = fcObjectCount rest
+      crossBudget = totalMorphs - base
+  in if crossBudget < 0 then []
+  else if k1 == 1 && k2 == 1 then groupGroupGlue bicomp rest crossBudget cauchyOnly
+  else if crossBudget == 0 then [disjointUnionCategory [bicomp, rest] | cauchyCheck]
+  else []  -- cross-morphisms between multi-object components not yet implemented
+  where
+    cauchyCheck = not cauchyOnly || (isCauchyComplete bicomp && isCauchyComplete rest)
+    gluedCat = disjointUnionCategory [bicomp, rest]
+
+-- | Glue two 1-object categories (groups) via a profunctor with the given
+-- cross-morphism budget. Tries all valid profunctor profiles and assignments.
+groupGroupGlue :: FiniteCategory -> FiniteCategory -> Int -> Bool -> [FiniteCategory]
+groupGroupGlue g1 g2 crossBudget cauchyOnly =
+  [ categoryFromOneWayProfunctor g1 g2 forward prof
+  | profileSize <- [0 .. crossBudget]
+  , let remaining = crossBudget - profileSize
+  , remaining == 0 || remaining == profileSize
+  -- profile goes forward (g1→g2) if forward=True, backward (g2→g1) if False
+  , forward <- [True, False]
+  , let targetSize = if forward then profileSize else remaining
+  , targetSize >= 0
+  , prof <- enumerateProfunctorsForProfile g1 g2 [targetSize]
+  , not cauchyOnly || isCauchyComplete (categoryFromOneWayProfunctor g1 g2 forward prof)
+  ]
 
 generatedSkeletons :: Int -> Int -> Bool -> [GeneratedSkeleton]
 generatedSkeletons n objectCount cauchyOnly =
