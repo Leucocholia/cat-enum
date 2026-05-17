@@ -14,8 +14,10 @@ import CodexSlop.Thin
 
 import Control.Monad (forM_, unless, when)
 import Data.Char (toLower)
+import Data.List (intercalate, sort)
 import qualified Data.Set as Set
 import qualified Data.Text.Lazy.IO as TLIO
+import qualified Data.Vector as V
 import Options.Applicative
 import System.Directory
   ( createDirectoryIfMissing
@@ -80,6 +82,7 @@ data GenerateOptions = GenerateOptions
   , genWriteReps :: !(Maybe FilePath)
   , genRepresentativeMode :: !RepresentativeMode
   , genDual :: !Bool
+  , genVerbose :: !Bool
   } deriving (Eq, Show)
 
 data ProfunctorOptions = ProfunctorOptions
@@ -174,6 +177,7 @@ generateParser =
     <*> optional (strOption (long "write-reps" <> metavar "DIR" <> help "Write representative keys"))
     <*> representativeModeParser
     <*> switch (long "dual" <> help "Identify categories with their opposites (C ≅ C^op)")
+    <*> switch (long "verbose" <> short 'v' <> help "Print categories as they are generated")
 
 representativeModeParser :: Parser RepresentativeMode
 representativeModeParser =
@@ -398,6 +402,7 @@ runGenerate options = do
       cauchyOnly = genCauchyComplete options
       writeReps = genWriteReps options
       dual = genDual options
+      verbose = genVerbose options
   maybe (pure ()) (createDirectoryIfMissing True) writeReps
   case mode of
     UpToEquality -> do
@@ -409,6 +414,15 @@ runGenerate options = do
     _ -> do
       groups <- componentGeneratedKeysCachedWith dual mode n objFilter cauchyOnly
       let total = sum (map (Set.size . snd) groups)
+      when verbose $
+        forM_ groups $ \(k, keys) -> do
+          putStrLn $ "[k=" ++ show k ++ "] " ++ show (Set.size keys) ++ " categories:"
+          forM_ (take 5 (Set.toAscList keys)) $ \key ->
+            case parseCategoryKey key of
+              Right cat -> putStrLn $ "  " ++ showCategory cat
+              Left _    -> putStrLn $ "  (parse error)"
+          when (Set.size keys > 5) $
+            putStrLn $ "  ... and " ++ show (Set.size keys - 5) ++ " more"
       putStrLn (show n ++ " morphisms: " ++ show total ++ label mode cauchyOnly dual)
       forM_ groups $ \(k, keys) -> do
         putStrLn ("  " ++ show k ++ " objects: " ++ show (Set.size keys))
@@ -428,6 +442,20 @@ runGenerate options = do
       let base = if cauchyOnly then " Cauchy-complete" else ""
           rel = representativeModeName mode ++ (if dual then " and dual" else "")
       in base ++ " generated categories up to " ++ rel
+
+showCategory :: FiniteCategory -> String
+showCategory cat =
+  let k = fcObjectCount cat
+      n = fcMorphismCount cat
+      src = fcSources cat
+      tgt = fcTargets cat
+      ids = fcIdentities cat
+      homCount s t = length [f | f <- [0 .. n-1], src V.! f == s, tgt V.! f == t]
+      matrix = [show [homCount i j | j <- [0..k-1]] | i <- [0..k-1]]
+      outIn = [ (sum [homCount i col | col <- [0..k-1]], sum [homCount row i | row <- [0..k-1]]) | i <- [0..k-1] ]
+  in "k=" ++ show k ++ " n=" ++ show n ++ " matrix=[" ++ intercalate "," matrix ++ "] out/in=" ++ show (sort outIn)
+  where
+    sort = Data.List.sort
 
 runProfunctors :: ProfunctorOptions -> IO ()
 runProfunctors options = do
