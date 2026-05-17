@@ -4,6 +4,7 @@ module CodexSlop.Canonical
   , dualKey
   , equalityCount
   , equivalenceKey
+  , oppositeCategory
   , RepresentativeMode(..)
   , representativeKey
   , representativeModeName

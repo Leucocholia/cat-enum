@@ -198,11 +198,13 @@ genuine edge case: two categories with hom-count matrices
 [0 0 1]         [0 1 1]
 ```
 
-that are equivalent (same two-object skeleton) but not isomorphic
-(different object-hom multisets: {(4,2),(4,2),(1,5)} vs
-{(5,1),(2,4),(2,4)}).  They are not formal duals either (see --dual
-flag).  Our count of 458 is the correct strict-isomorphism count; the
-OEIS likely uses a coarser convention or has a 1-entry error.
+that are equivalent (same two-object skeleton) and formal duals
+(`canonicalKey(c1) == canonicalKey(oppositeCategory(c2))`) but not
+isomorphic (different object-hom multisets: {(4,2),(4,2),(1,5)} vs
+{(5,1),(2,4),(2,4)}).  Our `--dual` flag collapses ALL formal dual pairs
+(458 → 264 at (9,3)); OEIS only collapses the one constructionally-opposite
+pair (458 → 457), likely because the Cruttwell table predated the
+recognition of the other dual pairs.
 | 10 | 3359 | |
 | 11 | 9309 | |
 

@@ -89,7 +89,7 @@ componentGeneratedKeysCachedWith dual mode n objectFilter cauchyOnly = do
       else pure []
   groups <-
     forM requestedObjects $ \k -> do
-      keys <- cachedGeneratedKeys mode n k cauchyOnly (computeKeys dual smallExtraBlocks k)
+      keys <- cachedGeneratedKeysDual dual mode n k cauchyOnly (computeKeys dual smallExtraBlocks k)
       pure (k, keys)
   pure [(k, keys) | (k, keys) <- groups, not (Set.null keys)]
   where
@@ -103,16 +103,24 @@ componentGeneratedKeysCachedWith dual mode n objectFilter cauchyOnly = do
 
     isoComputeKeysForMode :: Bool -> RepresentativeMode -> [ConnectedBlock] -> Int -> IO (Set.Set String)
     isoComputeKeysForMode dual' repMode smallExtraBlocks k = do
-      shortcut <- case smallExtraCauchyKeys repMode n k cauchyOnly of
-                    Just keys -> pure keys
-                    Nothing   -> pure Set.empty
-      full <- case smallExtraCauchyKeysFromBlocks repMode smallExtraBlocks n k cauchyOnly of
-                Just keys -> pure keys
-                Nothing   -> do
-                  cats <- generatedCategoriesForObjectCountCached n k cauchyOnly
-                  let keyFn = if dual' then dualKey repMode else representativeKey repMode
-                  pure (Set.fromList [keyFn cat | cat <- cats, not cauchyOnly || isCauchyComplete cat])
+      rawShortcut <- case smallExtraCauchyKeys repMode n k cauchyOnly of
+                       Just keys -> pure keys
+                       Nothing   -> pure Set.empty
+      rawFull <- case smallExtraCauchyKeysFromBlocks repMode smallExtraBlocks n k cauchyOnly of
+                   Just keys -> pure keys
+                   Nothing   -> do
+                     cats <- generatedCategoriesForObjectCountCached n k cauchyOnly
+                     let keyFn = if dual' then dualKey repMode else representativeKey repMode
+                     pure (Set.fromList [keyFn cat | cat <- cats, not cauchyOnly || isCauchyComplete cat])
+      let shortcut = if dual'
+                     then Set.map (dualKey repMode . parseOrError) rawShortcut
+                     else rawShortcut
+          full = rawFull
       pure (Set.union shortcut full)
+      where
+        parseOrError key = case parseCategoryKey key of
+                             Right c -> c
+                             Left e  -> error e
 
 equalityGeneratedCounts :: Bool -> Int -> Maybe Int -> Bool -> IO [(Int, Int)]
 equalityGeneratedCounts dual n objectFilter cauchyOnly = do
@@ -150,6 +158,31 @@ cachedGeneratedKeys mode morphisms objects cauchyOnly compute = do
     else recompute
   where
     path = generatedCacheFile mode morphisms objects cauchyOnly
+    recompute = do
+      keys <- compute
+      unless (Set.null keys) $
+        writeFile path (unlines (Set.toAscList keys))
+      pure keys
+
+-- | Cache-aware key retrieval, with separate cache for dual mode.
+cachedGeneratedKeysDual :: Bool -> RepresentativeMode -> Int -> Int -> Bool -> IO (Set.Set String) -> IO (Set.Set String)
+cachedGeneratedKeysDual True  = cachedGeneratedKeysCustom "isomorphism-dual"
+cachedGeneratedKeysDual False = cachedGeneratedKeys
+
+cachedGeneratedKeysCustom :: String -> RepresentativeMode -> Int -> Int -> Bool -> IO (Set.Set String) -> IO (Set.Set String)
+cachedGeneratedKeysCustom subdir mode morphisms objects cauchyOnly compute = do
+  createDirectoryIfMissing True dir
+  exists <- doesFileExist path
+  if exists
+    then do
+      contents <- readFile path
+      let keys = Set.fromList (filter (not . null) (lines contents))
+      if Set.null keys then recompute else pure keys
+    else recompute
+  where
+    dir = ".cat-enum-cache" </> "v4" </> "generated" </> subdir
+    path = dir </> fileName
+    fileName = "cauchy-" ++ boolName cauchyOnly ++ "-morphisms-" ++ show morphisms ++ "-objects-" ++ show objects ++ ".cats"
     recompute = do
       keys <- compute
       unless (Set.null keys) $
