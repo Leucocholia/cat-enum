@@ -12,7 +12,7 @@ import CodexSlop.Biconnected
  -- add to import
 import CodexSlop.Canonical (RepresentativeMode(..), allEqualityKeys, dualKey, equalityCount, representativeKey, representativeModeName)
 import CodexSlop.Category
-import CodexSlop.Decompose (disjointUnionCategory, isConnectedCategory)
+import CodexSlop.Decompose (disjointUnionCategory)
 import CodexSlop.Group (finiteGroupCategories)
 import CodexSlop.Profunctor
 import CodexSlop.Search
@@ -77,45 +77,31 @@ componentGeneratedKeysCached n objectFilter cauchyOnly = do
 componentGeneratedKeysCachedWith :: Bool -> RepresentativeMode -> Int -> Maybe Int -> Bool -> IO [(Int, Set.Set String)]
 componentGeneratedKeysCachedWith dual mode n objectFilter cauchyOnly = do
   let requestedObjects = maybe [1 .. n] (:[]) objectFilter
-      requestedSmallExtras =
-        [ n - k
-        | k <- requestedObjects
-        , n - k >= 3
-        , n - k <= 4
-        ]
-  smallExtraBlocks <-
-    if cauchyOnly && not (null requestedSmallExtras)
-      then connectedBlocksUpToExtraCached (maximum requestedSmallExtras)
-      else pure []
   groups <-
     forM requestedObjects $ \k -> do
-      keys <- cachedGeneratedKeysDual dual mode n k cauchyOnly (computeKeys dual smallExtraBlocks k)
+      keys <- cachedGeneratedKeysDual dual mode n k cauchyOnly (computeKeys dual k)
       pure (k, keys)
   pure [(k, keys) | (k, keys) <- groups, not (Set.null keys)]
   where
-    repKey kf = if dual then dualKey kf else representativeKey kf
-    computeKeys dual' smallExtraBlocks k
+    computeKeys dual' k
       | mode == UpToEquality = do
-          isoKeys <- cachedGeneratedKeys UpToIsomorphism n k cauchyOnly (isoComputeKeysForMode dual' UpToIsomorphism smallExtraBlocks k)
+          isoKeys <- cachedGeneratedKeys UpToIsomorphism n k cauchyOnly (isoComputeKeysForMode dual' UpToIsomorphism k)
           let cats = [cat | key <- Set.toAscList isoKeys, Right cat <- [parseCategoryKey key]]
           pure (Set.unions (map allEqualityKeys cats))
-      | otherwise = isoComputeKeysForMode dual' mode smallExtraBlocks k
+      | otherwise = isoComputeKeysForMode dual' mode k
 
-    isoComputeKeysForMode :: Bool -> RepresentativeMode -> [ConnectedBlock] -> Int -> IO (Set.Set String)
-    isoComputeKeysForMode dual' repMode smallExtraBlocks k = do
+    isoComputeKeysForMode :: Bool -> RepresentativeMode -> Int -> IO (Set.Set String)
+    isoComputeKeysForMode dual' repMode k = do
       rawShortcut <- case smallExtraCauchyKeys repMode n k cauchyOnly of
                        Just keys -> pure keys
                        Nothing   -> pure Set.empty
-      rawFull <- case smallExtraCauchyKeysFromBlocks repMode smallExtraBlocks n k cauchyOnly of
-                   Just keys -> pure keys
-                   Nothing   -> do
-                     cats <- generatedCategoriesForObjectCountCached n k cauchyOnly
-                     let keyFn = if dual' then dualKey repMode else representativeKey repMode
-                     pure (Set.fromList [keyFn cat | cat <- cats, not cauchyOnly || isCauchyComplete cat])
+      full <- do
+        cats <- generatedCategoriesForObjectCountCached n k cauchyOnly
+        let keyFn = if dual' then dualKey repMode else representativeKey repMode
+        pure (Set.fromList [keyFn cat | cat <- cats, not cauchyOnly || isCauchyComplete cat])
       let shortcut = if dual'
                      then Set.map (dualKey repMode . parseOrError) rawShortcut
                      else rawShortcut
-          full = rawFull
       pure (Set.union shortcut full)
       where
         parseOrError key = case parseCategoryKey key of
@@ -202,73 +188,11 @@ boolName :: Bool -> String
 boolName True = "true"
 boolName False = "false"
 
-smallExtraCauchyKeysFromBlocks :: RepresentativeMode -> [ConnectedBlock] -> Int -> Int -> Bool -> Maybe (Set.Set String)
-smallExtraCauchyKeysFromBlocks mode blocks morphisms objects cauchyOnly
-  | not cauchyOnly = Nothing
-  | extra < 3 || extra > 4 = Nothing
-  | otherwise =
-      Just
-        ( Set.fromList
-            [ representativeKey mode (disjointUnionCategory cats)
-            | cats <- connectedBlockMultisets blocks morphisms objects
-            ]
-        )
-  where
-    extra = morphisms - objects
-
-connectedBlocksUpToExtraCached :: Int -> IO [ConnectedBlock]
-connectedBlocksUpToExtraCached maxExtra =
-  concat <$> traverse connectedBlocksForExtraCached [0 .. maxExtra]
-
-connectedBlocksForExtraCached :: Int -> IO [ConnectedBlock]
-connectedBlocksForExtraCached 0 =
-  pure [ConnectedBlock 1 1 terminalCategory]
-connectedBlocksForExtraCached extra =
-  concat
-    <$> sequence
-      [ do
-          cats <- generatedCategoriesForObjectCountCached (objects + extra) objects True
-          pure
-            [ ConnectedBlock (objects + extra) objects cat
-            | cat <- cats
-            , isConnectedCategory cat
-            ]
-      | objects <- [1 .. extra + 1]
-      ]
-
-connectedBlockMultisets :: [ConnectedBlock] -> Int -> Int -> [[FiniteCategory]]
-connectedBlockMultisets blocks targetMorphisms targetObjects =
-  assemble targetMorphisms targetObjects 0
-  where
-    indexed = zip [0 :: Int ..] blocks
-
-    -- Smallest and largest morphism count per object among all blocks (for pruning)
-    minMorphsPerObj = minimum (map (\b -> cbMorphisms b `div` cbObjects b) blocks)
-    maxMorphsPerObj = maximum (map (\b -> (cbMorphisms b + cbObjects b - 1) `div` cbObjects b) blocks)
-
-    assemble 0 0 _ = [[]]
-    assemble remainingMorphisms remainingObjects start
-      | remainingMorphisms <= 0 || remainingObjects <= 0 = []
-      | remainingMorphisms < remainingObjects * minMorphsPerObj = []
-      | remainingMorphisms > remainingObjects * maxMorphsPerObj = []
-      | otherwise =
-          [ cbCategory block : rest
-          | (index, block) <- drop start indexed
-          , cbMorphisms block <= remainingMorphisms
-          , cbObjects block <= remainingObjects
-          , rest <-
-              assemble
-                (remainingMorphisms - cbMorphisms block)
-                (remainingObjects - cbObjects block)
-                index
-          ]
-
 smallExtraCauchyKeys :: RepresentativeMode -> Int -> Int -> Bool -> Maybe (Set.Set String)
 smallExtraCauchyKeys mode morphisms objects cauchyOnly
   | not cauchyOnly = Nothing
   | objects < 1 = Just Set.empty
   | extra < 0 = Just Set.empty
-  | extra > 4 = Nothing
   | otherwise = Just $ Set.fromList
       [ representativeKey mode (disjointUnionCategory (map snd dist ++ replicate remainingTerminals terminalCategory))
       | dist <- extraDistributions extra
@@ -318,13 +242,6 @@ terminalCategory =
     , fcIdentities = V.singleton 0
     , fcCompose = V.singleton 0
     }
-
-groupCategoryOfOrder :: Int -> FiniteCategory
-groupCategoryOfOrder order =
-  case finiteGroupCategories order of
-    [cat] -> cat
-    cat:_ -> cat
-    [] -> error ("no group category of order " ++ show order)
 
 parallelArrowCategory :: Int -> FiniteCategory
 parallelArrowCategory arrowCount =
