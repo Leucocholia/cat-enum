@@ -21,7 +21,6 @@ import CodexSlop.Shape
 import Control.Monad (forM, unless)
 import Data.Function (on)
 import Data.List (groupBy, intercalate, permutations, sort, sortBy)
-import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.Vector as V
 import System.Directory (createDirectoryIfMissing, doesFileExist)
@@ -925,51 +924,33 @@ chooseComponentsFrom candidates q maxMorphisms objectCount =
   where
     choose 0 _ remainingObjects =
       if remainingObjects == 0 then [[]] else []
-    choose count remainingMorphisms remainingObjects =
-      [ cat : rest
-      | cat <- candidates
-      , let morphisms = fcMorphismCount cat
-      , let objects = fcObjectCount cat
-      , morphisms <= remainingMorphisms
-      , objects <= remainingObjects
-      , remainingObjects - objects >= count - 1
-      , remainingMorphisms - morphisms >= count - 1
-      , rest <- choose (count - 1) (remainingMorphisms - morphisms) (remainingObjects - objects)
-      ]
-
--- | Grouped component selection: group candidates by type (morphisms, objects)
--- and select multisets per type.  Much faster for large q with few types.
--- Falls back to 'chooseComponentsFrom' for safety.
-chooseComponentsGrouped :: [FiniteCategory] -> Int -> Int -> Int -> [[FiniteCategory]]
-chooseComponentsGrouped candidates q maxMorphisms objectCount =
-  chooseGrouped (groupByMorphObj candidates) q maxMorphisms objectCount
-
-chooseGrouped :: [(Int, Int, [FiniteCategory])] -> Int -> Int -> Int -> [[FiniteCategory]]
-chooseGrouped [] 0 0 _ = [[]]
-chooseGrouped [] _ _ _ = []
-chooseGrouped ((szM, szK, cats):rest) remainingCount remainingMorphisms remainingObjects
-  | remainingCount <= 0 = if remainingObjects == 0 && remainingMorphisms == 0 then [[]] else []
-  | remainingMorphisms < remainingCount || remainingObjects < remainingCount = []
+    choose count remainingMorphisms remainingObjects
+      | remainingMorphisms < count = []
+      | remainingObjects < count  = []
+      | count == remainingObjects = oneObjectChoice count remainingMorphisms
       | otherwise =
-          [ chosen ++ more
-          | n <- [0 .. min remainingCount
-                         (min (remainingMorphisms `div` szM)
-                              (remainingObjects `div` szK))]
-          , let newMorphs = remainingMorphisms - n * szM
-          , let newObjs   = remainingObjects   - n * szK
-          , newMorphs >= remainingCount - n
-          , newObjs   >= remainingCount - n
-          , chosen  <- sequence (replicate n cats)
-          , more    <- chooseGrouped rest (remainingCount - n) newMorphs newObjs
+          [ cat : rest
+          | cat <- candidates
+          , let morphisms = fcMorphismCount cat
+          , let objects = fcObjectCount cat
+          , morphisms <= remainingMorphisms
+          , objects <= remainingObjects
+          , remainingObjects - objects >= count - 1
+          , remainingMorphisms - morphisms >= count - 1
+          , rest <- choose (count - 1) (remainingMorphisms - morphisms) (remainingObjects - objects)
           ]
 
--- | Group categories by (morphismCount, objectCount), preserving variety.
-groupByMorphObj :: [FiniteCategory] -> [(Int, Int, [FiniteCategory])]
-groupByMorphObj cats =
-  [ (m, k, group)
-  | ((m, k), group) <- Map.toList $
-      Map.fromListWith (++) [((fcMorphismCount c, fcObjectCount c), [c]) | c <- cats]
-  ]
+    -- Fast path: when each component must have exactly 1 object.
+    oneObjectChoice 0 _ = [[]]
+    oneObjectChoice count remainingMorphisms =
+      [ cat : rest
+      | cat <- candidates
+      , fcObjectCount cat == 1
+      , let morphisms = fcMorphismCount cat
+      , morphisms <= remainingMorphisms
+      , remainingMorphisms - morphisms >= count - 1
+      , rest <- oneObjectChoice (count - 1) (remainingMorphisms - morphisms)
+      ]
 
 componentCandidates :: Bool -> Int -> Int -> [FiniteCategory]
 componentCandidates cauchyOnly maxMorphisms maxObjects
