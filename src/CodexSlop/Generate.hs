@@ -17,7 +17,7 @@ import CodexSlop.Profunctor
 import CodexSlop.Search
 import CodexSlop.Shape
 
-import Control.Monad (forM)
+import Control.Monad (forM, unless)
 import Data.Function (on)
 import Data.List (groupBy, intercalate, permutations, sort, sortBy)
 import qualified Data.Set as Set
@@ -138,13 +138,20 @@ cachedGeneratedKeys mode morphisms objects cauchyOnly compute = do
   createDirectoryIfMissing True (generatedCacheDir mode)
   exists <- doesFileExist path
   if exists
-    then Set.fromList . filter (not . null) . lines <$> readFile path
-    else do
-      keys <- compute
-      writeFile path (unlines (Set.toAscList keys))
-      pure keys
+    then do
+      contents <- readFile path
+      let keys = Set.fromList (filter (not . null) (lines contents))
+      if Set.null keys
+        then recompute
+        else pure keys
+    else recompute
   where
     path = generatedCacheFile mode morphisms objects cauchyOnly
+    recompute = do
+      keys <- compute
+      unless (Set.null keys) $
+        writeFile path (unlines (Set.toAscList keys))
+      pure keys
 
 generatedCacheDir :: RepresentativeMode -> FilePath
 generatedCacheDir mode =
@@ -240,24 +247,30 @@ smallExtraCauchyKeys mode morphisms objects cauchyOnly
 
 -- | All ways to distribute @e@ extra morphisms across distinct objects.
 -- Each distribution is a list of (morphismCount, category) pairs where
--- a single object gets that many total morphisms (including its identity).
+-- a single object gets that many total morphisms (including its identity) —
+-- these are groups.  Also includes a single multi-object parallel-arrow
+-- component using all e extras.
+--
+-- Generated via integer partitions of e with non-decreasing part sizes
+-- to avoid duplicate permutations.
 extraDistributions :: Int -> [[(Int, FiniteCategory)]]
-extraDistributions 0 = [[]]
-extraDistributions 1 = [[(2, groupCategoryOfOrder 2)]
-                      , [(3, parallelArrowCategory 1)]]
-extraDistributions 2 = [[(3, groupCategoryOfOrder 3)], [(2, groupCategoryOfOrder 2), (2, groupCategoryOfOrder 2)]
-                      , [(4, parallelArrowCategory 2)]]
-extraDistributions 3 = [[(4, cat)] | cat <- finiteGroupCategories 4]
-                    ++ [[(3, groupCategoryOfOrder 3), (2, groupCategoryOfOrder 2)]]
-                    ++ [[(2, groupCategoryOfOrder 2), (2, groupCategoryOfOrder 2), (2, groupCategoryOfOrder 2)]]
-                    ++ [[(5, parallelArrowCategory 3)]]
-extraDistributions 4 = [[(5, cat)] | cat <- finiteGroupCategories 5]
-                    ++ [[(4, c4), (2, groupCategoryOfOrder 2)] | c4 <- finiteGroupCategories 4]
-                    ++ [[(3, groupCategoryOfOrder 3), (3, groupCategoryOfOrder 3)]]
-                    ++ [[(3, groupCategoryOfOrder 3), (2, groupCategoryOfOrder 2), (2, groupCategoryOfOrder 2)]]
-                    ++ [[(2, groupCategoryOfOrder 2), (2, groupCategoryOfOrder 2), (2, groupCategoryOfOrder 2), (2, groupCategoryOfOrder 2)]]
-                    ++ [[(6, parallelArrowCategory 4)]]
-extraDistributions _ = []
+extraDistributions e
+  | e < 0  = []
+  | e == 0 = [[]]
+  | otherwise =
+      ([(e + 2, parallelArrowCategory e)] :: [(Int, FiniteCategory)])
+      : [[(sz, groupCat sz) | sz <- map (+ 1) part]
+        | part <- partitions e
+        , all (\p -> not (null (finiteGroupCategories (p + 1)))) part
+        ]
+
+groupCat :: Int -> FiniteCategory
+groupCat n = head (finiteGroupCategories n)
+
+-- | Integer partitions of n with parts ≥ 1, non-decreasing order.
+partitions :: Int -> [[Int]]
+partitions 0 = [[]]
+partitions n = [p : ps | p <- [1 .. n], ps <- partitions (n - p), null ps || p <= head ps]
 
 terminalCategory :: FiniteCategory
 terminalCategory =
