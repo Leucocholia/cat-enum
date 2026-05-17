@@ -1,0 +1,1 @@
+dir = .cat-enum-cache\v4\equality-counts

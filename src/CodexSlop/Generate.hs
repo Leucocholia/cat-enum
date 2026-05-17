@@ -305,14 +305,10 @@ generatedCategoriesForObjectCount n objectCount cauchyOnly =
 generatedCategoriesForObjectCountCached :: Int -> Int -> Bool -> IO [FiniteCategory]
 generatedCategoriesForObjectCountCached n objectCount cauchyOnly
   | n < objectCount = pure []
-  | n <= 2 * objectCount - 2 = do
-      -- All categories are disconnected; build via DP from smaller connected components
-      table <- dpAllCached n cauchyOnly
-      pure (table !! n !! objectCount)
   | otherwise = do
       table <- dpAllCached n cauchyOnly
       let result = table !! n !! objectCount
-      if null result
+      if null result && n >= 2 * objectCount - 1
         then do
           -- DP missed something; fall back to full skeleton search
           skeletons <- uniqueSkeletons <$> generatedSkeletonsCached n objectCount cauchyOnly
@@ -343,32 +339,23 @@ dpAllCached maxN cauchyOnly = do
 
 buildDPTable :: Int -> Bool -> IO [[[FiniteCategory]]]
 buildDPTable maxN cauchyOnly = do
-  -- Step 1: biconnected components from cache (the atoms)
+  -- Biconnected components from cache (the atoms, all k)
   bicompTable <- forM [0 .. maxN] $ \n ->
     forM [0 .. n] $ \k -> do
       if k == 0 || n < k then pure []
       else concat . map snd <$> biconnectedCanonicalCategoriesCached n (Just k) cauchyOnly
 
-  -- Step 2: connected non-biconnected categories via skeletons
-  connTable <- forM [0 .. maxN] $ \n ->
-    forM [0 .. n] $ \k -> do
-      if k == 0 || n < k || n <= 2 * k - 2 then pure []
-      else do
-        -- Connected skeletons minus those already covered by biconnected
-        let bicompKeys = Set.fromList (map canonicalKey (bicompTable !! n !! k))
-        cats <- generatedConnectedCached n k cauchyOnly
-        pure (filter (\c -> not (Set.member (canonicalKey c) bicompKeys)) cats)
-
-  -- Step 3: DP — all[n][k] = bicomp[n][k] ∪ conn_nb[n][k] ∪ Σ glue(bicomp, all)
+  -- DP: all[n][k] = bicomp[n][k] ∪ Σ glue(bicomp, all)
+  -- Profunctor gluing handles group→any via cross-morphisms;
+  -- multi-object bicomps fall back to disjoint union.
   let allTable = table
       table = [[ cell n k | k <- [0 .. n] ] | n <- [0 .. maxN] ]
       cell 0 0 = []
       cell n k
         | k <= 0 || k > n = []
         | otherwise =
-            let base = bicompTable !! n !! k ++ connTable !! n !! k
-                -- Try gluing a biconnected component onto an existing category
-                glued = [ gluedCat
+            let base = bicompTable !! n !! k
+                glued = [ gluCat
                         | n1 <- [1 .. n - 1]
                         , k1 <- [1 .. min k n1]
                         , bicomp <- bicompTable !! n1 !! k1
@@ -376,46 +363,109 @@ buildDPTable maxN cauchyOnly = do
                         , let k2 = k - k1
                         , k2 <= n2
                         , rest <- table !! n2 !! k2
-                        , gluedCat <- tryGlueBicomp bicomp rest n cauchyOnly
+                        , gluCat <- tryGlueBicomp bicomp rest n cauchyOnly
                         ]
             in base ++ glued
   pure allTable
 
 -- | Try to glue a biconnected component onto a smaller category via profunctors.
--- Returns all valid glued categories with exactly n total morphisms.
--- For 1-object components, uses profunctor gluing; otherwise falls back
--- to disjoint union (no cross-morphisms).
+-- For 1-object groups, uses profunctor gluing (cross-morphisms allowed).
+-- For multi-object components, falls back to disjoint union.
 tryGlueBicomp :: FiniteCategory -> FiniteCategory -> Int -> Bool -> [FiniteCategory]
 tryGlueBicomp bicomp rest totalMorphs cauchyOnly =
   let n1 = fcMorphismCount bicomp
       n2 = fcMorphismCount rest
       base = n1 + n2
-      k1 = fcObjectCount bicomp
-      k2 = fcObjectCount rest
       crossBudget = totalMorphs - base
   in if crossBudget < 0 then []
-  else if k1 == 1 && k2 == 1 then groupGroupGlue bicomp rest crossBudget cauchyOnly
-  else if crossBudget == 0 then [disjointUnionCategory [bicomp, rest] | cauchyCheck]
-  else []  -- cross-morphisms between multi-object components not yet implemented
-  where
-    cauchyCheck = not cauchyOnly || (isCauchyComplete bicomp && isCauchyComplete rest)
-    gluedCat = disjointUnionCategory [bicomp, rest]
+  else if fcObjectCount bicomp == 1 && fcObjectCount rest == 1
+       then groupGroupGlue bicomp rest crossBudget cauchyOnly
+  else if fcObjectCount bicomp == 1
+       then groupToAnyGlue bicomp rest crossBudget cauchyOnly
+  else if crossBudget == 0 then [disjointUnionCategory [bicomp, rest]]
+  else []
 
--- | Glue two 1-object categories (groups) via a profunctor with the given
--- cross-morphism budget. Tries all valid profunctor profiles and assignments.
+-- | Glue two 1-object groups via profunctors.
 groupGroupGlue :: FiniteCategory -> FiniteCategory -> Int -> Bool -> [FiniteCategory]
 groupGroupGlue g1 g2 crossBudget cauchyOnly =
   [ categoryFromOneWayProfunctor g1 g2 forward prof
   | profileSize <- [0 .. crossBudget]
   , let remaining = crossBudget - profileSize
   , remaining == 0 || remaining == profileSize
-  -- profile goes forward (g1→g2) if forward=True, backward (g2→g1) if False
   , forward <- [True, False]
   , let targetSize = if forward then profileSize else remaining
   , targetSize >= 0
   , prof <- enumerateProfunctorsForProfile g1 g2 [targetSize]
   , not cauchyOnly || isCauchyComplete (categoryFromOneWayProfunctor g1 g2 forward prof)
   ]
+
+-- | Glue a group onto any category via profunctors (cross-morphisms from
+-- the group's object to each object of the rest).  Tries all valid profiles.
+groupToAnyGlue :: FiniteCategory -> FiniteCategory -> Int -> Bool -> [FiniteCategory]
+groupToAnyGlue group rest crossBudget cauchyOnly
+  | crossBudget == 0 = [disjointUnionCategory [group, rest]]
+  | not (isConnectedCategory rest) = []  -- disconnected rest: no cross-morphisms
+  | otherwise =
+      [ gluedCat
+      | profile <- compositions crossBudget k2
+      , prof <- enumerateProfunctorsForProfile group rest profile
+      , let gluedCat = buildGlued group rest prof profile
+      , not cauchyOnly || isCauchyComplete gluedCat
+      ]
+  where k2 = fcObjectCount rest
+
+-- | Build the glued category from a group G, a category C, and a profunctor.
+-- Cross-morphisms go from object 0 (G) to each object of C.
+buildGlued :: FiniteCategory -> FiniteCategory -> FiniteProfunctor -> [Int] -> FiniteCategory
+buildGlued group rest prof profile =
+  FiniteCategory
+    { fcMorphismCount = ng + nr + crossM
+    , fcObjectCount   = 1 + k2
+    , fcSources   = V.fromList $
+        replicate ng 0 ++ map (+1) (V.toList (fcSources rest)) ++ crossSrc
+    , fcTargets   = V.fromList $
+        replicate ng 0 ++ map (+1) (V.toList (fcTargets rest)) ++ crossTgt
+    , fcIdentities = V.fromList $
+        fcIdentities group V.! 0 : map (+ ng) (V.toList (fcIdentities rest))
+    , fcCompose   = V.fromList [comp f g | f <- [0..n-1], g <- [0..n-1]]
+    }
+  where
+    ng = fcMorphismCount group
+    nr = fcMorphismCount rest
+    k2 = fcObjectCount rest
+    offCross = ng + nr
+    crossM   = sum profile
+    n        = ng + nr + crossM
+
+    crossSrc = concat [replicate (profile !! j) 0 | j <- [0..k2-1]]
+    crossTgt = concat [replicate (profile !! j) (j+1) | j <- [0..k2-1]]
+
+    -- Map a cross-morphism index to its target object (1..k2) and offset within that fiber
+    crossTarget idx = head [j | j <- [0..k2-1], idx < sum (take (j+1) profile)]
+    crossOffset idx = let j = crossTarget idx in idx - sum (take j profile)
+
+    comp f g
+      | f < ng && g < ng =                                                       -- G ; G
+          if f == 0 then g else if g == 0 then f
+          else let r = composeAt group f g in r
+      | f < ng && g >= offCross =                                                 -- G ; cross
+          let idx = g - offCross
+              j   = crossTarget idx
+              off = crossOffset idx
+          in offCross + (fpLeftActions prof V.! f !! off)
+      | f >= offCross && g >= ng && g < offCross =                                -- cross ; C
+          let idx = f - offCross
+              j   = crossTarget idx
+              off = crossOffset idx
+          in offCross + (fpRightActions prof V.! (g - ng) !! off)
+      | f >= ng && f < offCross && g >= ng && g < offCross =                      -- C ; C
+          let r = composeAt rest (f - ng) (g - ng)
+          in if r < 0 then -1 else ng + r
+      | f >= ng && f < offCross && g == 0 =                                       -- C ; id_G
+          f
+      | f == 0 && g >= ng && g < offCross =                                       -- id_G ; C
+          g
+      | otherwise = -1
 
 generatedSkeletons :: Int -> Int -> Bool -> [GeneratedSkeleton]
 generatedSkeletons n objectCount cauchyOnly =
