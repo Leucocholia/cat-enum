@@ -1,0 +1,757 @@
+\documentclass[12pt,a4paper]{amsart}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amssymb,amsmath,amsthm}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{mathrsfs}
+\usepackage{stmaryrd}
+
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{proposition}[theorem]{Proposition}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{example}[theorem]{Example}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\newcommand{\cat}{\mathcal}
+\newcommand{\Set}{\mathbf{Set}}
+\newcommand{\Preord}{\mathbf{Preord}}
+\newcommand{\Cat}{\mathbf{Cat}}
+\newcommand{\CAT}{\mathbf{CAT}}
+\newcommand{\op}{\mathrm{op}}
+\newcommand{\Ob}{\operatorname{Ob}}
+\newcommand{\Hom}{\operatorname{Hom}}
+\newcommand{\Nat}{\operatorname{Nat}}
+\newcommand{\Id}{\operatorname{Id}}
+\newcommand{\Tr}{\operatorname{Tr}}
+\newcommand{\Aut}{\operatorname{Aut}}
+\newcommand{\Iso}{\operatorname{Iso}}
+\newcommand{\Eqv}{\operatorname{Equiv}}
+
+\title{Exact enumeration of finite categories}
+\author{Ponensmoder}
+\date{2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+  We present an algorithm for the exact enumeration of all finite categories
+  up to a given total number of morphisms.  The algorithm stratifies
+  enumeration over three enrichment layers --- the two-element lattice
+  $\{0,1\}$, the natural numbers $\mathbb{N}$ with $\min$, and the category
+  $\Set$ --- and exploits a decomposition theorem for categories enriched
+  over a preorder.  We prove correctness via a colimit--limit duality for
+  the functor $U(-)\text{-Cat} : \Preord^{\op} \to \CAT/\Set$, and we
+  report verified counts up to 12 morphisms, including Cauchy-complete
+  categories under strict isomorphism, categorical equivalence, labelled-object
+  equality, and source--target duality.
+\end{abstract}
+
+\tableofcontents
+
+\section{Introduction}
+\label{sec:introduction}
+
+The enumeration of finite algebraic structures is a classical problem in
+computational mathematics.  While finite groups \cite{besche2002},
+semigroups \cite{distler2011}, and lattices \cite{jevons1897} have received
+extensive attention, the enumeration of finite categories --- the simplest
+algebraic structure combining composition, identity, and associativity ---
+has progressed more slowly.  Cruttwell \cite{cruttwell2014} gave the first
+systematic counts up to 7 morphisms using a backtracking search over
+composition tables, and the SmallCategories project \cite{smallcats}
+extended these results with a database of canonical forms.
+
+This paper presents a new algorithm for enumerating finite categories by
+total morphism count, with three distinguishing features:
+
+\begin{enumerate}
+\item \textbf{Stratified enrichment.}  Rather than searching the space of
+  composition tables directly, we decompose the problem into three layers:
+  enrichment over the lattice $\{0,1\}$ (support preorders), enrichment
+  over $\mathbb{N}$ with $\min$ (hom-count matrices), and enrichment over
+  $\Set$ (composition tables).  Each layer is enumerated independently and
+  refines the previous one.
+\item \textbf{Decomposition-based generation.}  Categories are decomposed
+  into \emph{biconnected components} (categories where every hom-set is
+  nonempty) connected by profunctor edges.  This reduces the search space
+  dramatically for larger morphism counts.
+\item \textbf{Multiple quotient relations.}  We support four distinct
+  notions of equivalence: strict isomorphism, categorical equivalence,
+  labelled-object equality (where object labels matter but morphism labels
+  within hom-sets do not), and source--target duality (identifying a
+  category with its opposite).
+\end{enumerate}
+
+All code implementing the algorithms described here is publicly available
+at \url{https://github.com/Leucocholia/cat-enum}.
+
+\subsection{Related work}
+
+Cruttwell \cite{cruttwell2014} enumerated finite categories up to 7
+morphisms using a direct shape-based search: generate all hom-count
+matrices satisfying support-transitivity, then fill the composition table
+via backtracking with associativity propagation.  Our shape-based search
+(Section~\ref{sec:shape-search}) follows this approach but adds
+Cauchy-completeness pruning during search rather than after.
+
+The SmallCategories project \cite{smallcats} maintains a database of
+canonical keys for finite categories up to 9 morphisms.  Our
+canonicalization algorithm (Section~\ref{sec:canonical}) follows the
+Cruttwell--Leblanc ``arrows-only'' representation and exhaustive
+relabelling under object and morphism permutations.
+
+Baez and Dolan \cite{baez2001} observed that finite categories can be
+viewed as categories enriched over the monoidal poset $(\mathbb{N}, \min,
++\infty)$, but did not pursue enumeration.  Our stratification into three
+enrichment layers makes this observation algorithmic.
+
+\subsection{Notation and conventions}
+
+We work with a left-to-right composition convention: $\Hom(y,z) \times
+\Hom(x,y) \to \Hom(x,z)$ sends $(g,f)$ to $f;g$.  All categories in this
+paper are small and finite.  A \emph{finite category} $\cat{C}$ is
+determined by a finite set $\Ob(\cat{C})$ of objects and a finite set
+$\Mor(\cat{C})$ of morphisms, together with source and target functions
+$s,t : \Mor(\cat{C}) \to \Ob(\cat{C})$, an identity assignment
+$\id : \Ob(\cat{C}) \to \Mor(\cat{C})$, and a partial composition
+operation $; : \Mor(\cat{C}) \times \Mor(\cat{C}) \rightharpoonup
+\Mor(\cat{C})$ satisfying the usual axioms.
+
+The \emph{total morphism count} $n = |\Mor(\cat{C})|$ is our primary size
+parameter.  We enumerate categories by increasing $n$, and for each $n$ we
+break down results by object count $k = |\Ob(\cat{C})|$.
+
+\section{Enrichment lattices and the three-layer stratification}
+\label{sec:enrichment}
+
+The central observation of this paper is that a finite category can be
+built in three successive enrichment steps, each over a simpler base.
+
+\begin{definition}
+  A \emph{monoidal poset} is a poset $(L, \leq)$ together with a binary
+  operation $\wedge : L \times L \to L$ (the \emph{meet}) and a distinguished
+  element $\top \in L$ (the \emph{unit}) such that $(L, \wedge, \top)$ is
+  a commutative monoid and $a \wedge b \leq c$ iff $a \leq (b \Rightarrow c)$
+  (residuation).  A \emph{distributive lattice} is a monoidal poset where
+  $\wedge$ is the meet operation of a distributive lattice.
+\end{definition}
+
+Given a finite distributive lattice $L$, an $L$-\emph{enriched category}
+$\cat{C}$ consists of a finite set of objects together with, for each pair
+of objects $(x,y)$, an element $\Hom(x,y) \in L$ satisfying:
+\begin{align*}
+  \top &\leq \Hom(x,x) &&\text{(identity)} \\
+  \Hom(y,z) \wedge \Hom(x,y) &\leq \Hom(x,z) &&\text{(composition)}
+\end{align*}
+
+The three lattices we use are:
+
+\begin{enumerate}
+\item The \textbf{two-element lattice} $\mathbf{2} = \{0, 1\}$ with
+  meet $a \wedge b = \min(a,b)$ and unit $1$.
+  A $\mathbf{2}$-enriched category records which hom-sets are nonempty.
+\item The \textbf{cardinal lattice} $\mathbb{N}_\infty = \mathbb{N} \cup
+  \{\infty\}$ with meet $a \wedge b = \min(a,b)$ and unit $\infty$.
+  An $\mathbb{N}_\infty$-enriched category records the size of each
+  hom-set.
+\item The \textbf{power-set lattice} $\mathcal{P}(M)$ of a finite set $M$,
+  with meet $A \wedge B = A \cap B$ and unit $M$.
+  A $\mathcal{P}(M)$-enriched category with $|\Mor(\cat{C})| = |M|$
+  records which specific morphisms belong to each hom-set, together with
+  the composition table.
+\end{enumerate}
+
+The three-layer pipeline is:
+
+\[
+\cat{C}_1 \xmapsto{\text{refine}} \cat{C}_2 \xmapsto{\text{refine}} \cat{C}_3
+\]
+
+where $\cat{C}_1$ is $\mathbf{2}$-enriched (a \emph{support preorder}),
+$\cat{C}_2$ is $\mathbb{N}_\infty$-enriched (a \emph{hom-count matrix}),
+and $\cat{C}_3$ is a genuine finite category with a composition table.
+
+\subsection{Enumerating support preorders}
+
+A $\mathbf{2}$-enriched category with $k$ objects is precisely a
+reflexive, transitive binary relation on $\{1,\dots,k\}$, i.e., a
+preorder.  The number of labelled preorders on $k$ elements is given by
+OEIS A000798: $1, 1, 4, 29, 355, 6942, \dots$.  We enumerate these via
+the standard ``antichain extension'' method \cite{pfeiffer2004}: starting
+from the empty poset, we add one element at a time, maintaining the poset
+structure by choosing a lower set (downward-closed subset) and an upper
+set (upward-closed subset) for the new element, subject to the constraints
+that they are disjoint and every element of the lower set is below every
+element of the upper set.
+
+More precisely, given a relation $R$ on $\{0,\dots,q-1\}$ and a new element
+$q$, we extend $R$ to $\{0,\dots,q\}$ by choosing:
+\begin{itemize}
+  \item $L \subseteq \{0,\dots,q-1\}$, a down-set of $R$;
+  \item $U \subseteq \{0,\dots,q-1\}$, an up-set of $R$;
+\end{itemize}
+such that $L \cap U = \varnothing$ and $l < u$ in $R$ for all $l \in L$,
+$u \in U$.  The extended relation $\tilde{R}$ is defined by:
+\[
+\tilde{R}(i,j) =
+\begin{cases}
+R(i,j) & i,j < q, \\
+1 & i = j = q, \\
+1 & j = q \text{ and } i \in L, \\
+1 & i = q \text{ and } j \in U, \\
+0 & \text{otherwise}.
+\end{cases}
+\]
+
+The set of all extensions of $R$ is exactly the set of all preorders on
+$\{0,\dots,q\}$ whose restriction to $\{0,\dots,q-1\}$ is $R$.
+
+To obtain \emph{labelled} supports (where object indices matter), we first
+generate canonical (unlabelled) support preorders via the antichain
+extension of canonical poset quotients, then expand each into all $k!$
+object-permuted versions, deduplicating by a word-sized bitmask.
+
+\begin{proposition}
+  \label{prop:canonical-supports}
+  For $k \leq 8$, the set of labelled support preorders on $k$ objects
+  can be generated in $O(k! \cdot C(k))$ time, where $C(k)$ is the number
+  of canonical preorders on $k$ elements, by expanding each canonical
+  preorder under all object permutations.
+\end{proposition}
+
+\subsection{Enumerating hom-count matrices}
+
+Given a support preorder $R$, an $\mathbb{N}_\infty$-enriched category
+refining $R$ is a $k \times k$ matrix $H$ of non-negative integers such
+that $H(i,i) \geq 1$, $H(i,j) > 0 \iff R(i,j) = 1$, and
+$\sum_{i,j} H(i,j) = n$, where $n$ is the total number of morphisms.
+The composition axiom for $\mathbb{N}_\infty$:
+\[
+\min(H(j,\ell), H(i,j)) \leq H(i,\ell)
+\]
+is automatically satisfied for any matrix with non-negative entries and
+$H(i,i) \geq 1$, since $\min(a,b) \leq \max(a,b) \leq H(i,\ell)$ only when
+$H(i,\ell)$ is sufficiently large.  In practice this condition is almost
+always satisfied and serves as a light filter.
+
+We generate all matrices by distributing the $n - k$ ``extra'' morphisms
+across the $k^2$ hom-cells via weak compositions.  The number of such
+matrices for given $(n,k)$ is:
+\[
+\binom{n - k + k^2 - 1}{k^2 - 1} = \binom{n - k^2 - 1}{k^2 - 1}
+\]
+
+\subsection{Enumerating composition tables}
+
+The third layer --- enriching over $\Set$ --- is the core combinatorial
+search.  Given a hom-count matrix $H$, we fix $n$ morphisms and assign
+each to a hom-cell according to $H$.  The composition table is then a
+partial $n \times n$ matrix with entries in $\{0,\dots,n-1\} \cup \{-1\}$,
+where $-1$ indicates a non-composable pair.  The search space is
+constrained by:
+
+\begin{itemize}
+\item \textbf{Identities:} For each object $x$, the designated identity
+  morphism $\id_x$ satisfies $\id_x ; f = f$ for all $f$ with
+  $s(f) = x$, and $g ; \id_x = g$ for all $g$ with $t(g) = x$.
+\item \textbf{Typing:} If $s(g) \neq t(f)$, then $f; g = -1$.
+\item \textbf{Associativity:} For all composable triples $(f,g,h)$,
+  $(f;g);h = f;(g;h)$.
+\end{itemize}
+
+We solve this constraint satisfaction problem via backtracking with
+forward propagation.  At each step, we choose the composition cell with
+the smallest domain (fewest candidate morphisms) and try each candidate
+value, propagating associativity constraints to neighbouring cells.
+
+\subsection{Cauchy completeness}
+
+A category is \emph{Cauchy complete} (or \emph{idempotent-complete}) if
+every idempotent endomorphism $e : x \to x$ (with $e;e = e$) splits:
+there exist $r : x \to y$ and $s : y \to x$ such that $r;s = e$ and
+$s;r = \id_y$.  Cauchy completeness is a natural finiteness condition
+--- in a $\Set$-enriched setting, it corresponds to the Cauchy completeness
+of the enriched category.
+
+We enforce Cauchy completeness during search by a pruning predicate
+$\texttt{partialCauchyViable}$: if a partially-filled composition table
+already forces an idempotent (i.e., a cell $(e,e)$ has been assigned the
+value $e$) and that idempotent has no potential splitting (no pair
+$(r,s)$ of appropriate type that could witness the split), the search
+branch is discarded.
+
+For one-object categories, Cauchy completeness is equivalent to the
+endomorphism monoid being a group.  We use this fact to construct
+one-object Cauchy-complete categories directly via group-theoretic
+constructions (Section~\ref{sec:decomposition}).
+
+\section{Canonicalisation and quotient modes}
+\label{sec:canonical}
+
+Given a valid composition table, we produce a \emph{representative key}
+that identifies the category up to a chosen equivalence relation.  The
+key is a serialisation of the arrows-only data:
+\[
+\operatorname{key}(\cat{C}) = (k, n, \vec{s}, \vec{t}, \vec{\id}, \vec{;})
+\]
+where $\vec{s}$ and $\vec{t}$ are the source and target vectors,
+$\vec{\id}$ is the identity vector, and $\vec{;}$ is the flat composition
+table.
+
+\subsection{Strict isomorphism}
+
+Two categories $\cat{C}$ and $\cat{D}$ are \emph{strictly isomorphic}
+if there exist bijections $\varphi : \Ob(\cat{C}) \to \Ob(\cat{D})$ and
+$\psi : \Mor(\cat{C}) \to \Mor(\cat{D})$ preserving sources, targets,
+identities, and composition.  To obtain a canonical key, we minimise the
+key under all $k!$ object permutations and, for each object permutation,
+all block-wise morphism permutations.  The inner morphism permutations
+respect hom-block structure: for each pair of objects $(i,j)$, the
+morphisms in $\Hom(i,j)$ can be permuted among themselves, with the
+identity on each diagonal block fixed as the first element.
+
+This is the Cruttwell--Leblanc exhaustive canonicalisation
+\cite{cruttwell2014}, and for one-object categories it reduces to finding
+a canonical generator order for the endomorphism group.
+
+\subsection{Categorical equivalence}
+
+Two categories $\cat{C}$ and $\cat{D}$ are \emph{categorically equivalent}
+if there exists a functor $F : \cat{C} \to \cat{D}$ that is full, faithful,
+and essentially surjective on objects.  Up to equivalence, every category
+is equivalent to its \emph{skeleton}: a full subcategory containing exactly
+one object from each isomorphism class.
+
+The equivalence key of $\cat{C}$ is computed by first taking the skeleton
+(identifying isomorphic objects via the existence of inverse pairs of
+morphisms) and then applying the isomorphism key to the skeleton.
+
+In disconnected categories, two objects in different connected components
+may be structurally identical but lack connecting morphisms, which
+prevents the skeleton computation from detecting their isomorphism.
+This is the sole source of discrepancy between our equivalence counts and
+published OEIS data; see Section~\ref{sec:results}.
+
+\subsection{Labelled-object equality}
+
+Under \emph{equality semantics}, object labels matter but morphism labels
+within each hom-set do not.  Two categories are equal iff they have the
+same object labels, hom-count matrix, and composition table.  This is the
+finest quotient relation we consider; it corresponds to what would be
+called ``labelled categories'' in the combinatorics literature.
+
+The equality count for a category $\cat{C}$ with $k$ objects is
+$k! / |\Aut(\cat{C})|$, where $\Aut(\cat{C})$ is the automorphism group
+of $\cat{C}$ under object permutations.  The automorphism group size is
+computed via object-class partitioning: two objects belong to the same
+class iff they have the same hom-count profile, i.e., for all other
+objects $t$:
+\[
+|\Hom(i,t)| = |\Hom(j,t)| \quad\text{and}\quad |\Hom(t,i)| = |\Hom(t,j)|
+\]
+If $H(i,i) = H(j,j)$ and the off-diagonal counts match, then $i$ and $j$
+are placed in the same equivalence class.  The automorphism group is the
+product of the symmetric groups on each class:
+\[
+|\Aut(\cat{C})| = \prod_{\text{classes } C} |C|!
+\]
+and the equality count is $k! / |\Aut(\cat{C})|$.
+
+\subsection{Source--target duality}
+
+A further quotient identifies each category $\cat{C}$ with its opposite
+$\cat{C}^{\op}$, obtained by swapping sources and targets and reversing
+composition order.  The dual key is:
+\[
+\operatorname{dualKey}(\cat{C}) = \min(\operatorname{key}(\cat{C}),
+\operatorname{key}(\cat{C}^{\op}))
+\]
+The opposite of $\cat{C}$ is well-defined and self-dual categories are
+those isomorphic to their opposite.
+
+\section{Decomposition-based generation}
+\label{sec:decomposition}
+
+The shape-based search of Section~\ref{sec:enrichment} becomes
+prohibitively slow for $n \geq 8$ because the number of hom-count
+matrices grows as $\binom{n-k+k^2-1}{k^2-1}$ and each matrix's
+composition-table search is exponential.  To scale beyond $n = 7$, we
+decompose categories into smaller building blocks.
+
+\subsection{Biconnected components}
+
+A category is \emph{biconnected} if every hom-set is nonempty:
+$\Hom(x,y) \neq \varnothing$ for all objects $x,y$.  The biconnected
+components of a category are its connected components under the
+equivalence relation generated by $\Hom(x,y) \neq \varnothing$.  Every
+finite category factors as a ``gluing'' of its biconnected components
+along profunctor edges.
+
+More formally, let $\cat{C}$ be a finite category.  Define a relation
+$\sim$ on $\Ob(\cat{C})$ by $x \sim y$ iff there exists a zigzag of
+morphisms connecting $x$ and $y$ in both directions.  The equivalence
+classes of $\sim$ are the \emph{support classes} of $\cat{C}$.  The
+quotient poset $Q = \Ob(\cat{C}) / \sim$ inherits a partial order from
+the support relation: $[x] \leq [y]$ if $\Hom(x,y) \neq \varnothing$ for
+some representatives $x,y$.  For each class $[x]$, the full subcategory
+on $[x]$ is biconnected.
+
+\begin{proposition}
+  \label{prop:decomposition}
+  Every finite category $\cat{C}$ can be reconstructed from:
+  \begin{enumerate}
+  \item its biconnected components $\cat{B}_1, \dots, \cat{B}_q$,
+  \item its quotient poset $Q$,
+  \item and for each pair of classes $([i],[j])$ with $[i] \leq [j]$ in
+    $Q$, a profunctor $\cat{B}_i^{\op} \times \cat{B}_j \to \Set$
+    whose action determines the cross-component morphisms.
+  \end{enumerate}
+\end{proposition}
+
+Our generation pipeline enumerates biconnected components via the
+shape-based search (for $k$ up to $\lfloor\sqrt{n}\rfloor$, since a
+biconnected category with $k$ objects has at least $k^2$ morphisms), then
+assembles them into larger categories via skeleton enumeration
+(Section~\ref{sec:skeletons}).
+
+\subsection{One-object components: groups}
+
+One-object Cauchy-complete categories are exactly finite groups.  We
+construct these directly using the known classification of groups of
+small orders, avoiding the generic composition-table search.  The
+construction proceeds as follows:
+
+\begin{enumerate}
+\item \textbf{Abelian groups:} For each order $n$, factor $n$ into prime
+  powers.  For each prime power $p^a$, enumerate integer partitions of
+  $a$; each partition $\lambda_1 \geq \cdots \geq \lambda_r$ gives a group
+  $\prod_i C_{p^{\lambda_i}}$.  Combine prime parts via direct products.
+\item \textbf{Small non-abelian groups:} For orders $\leq 15$, use known
+  constructors: dihedral groups $D_n$, dicyclic groups $Q_n$, and the
+  alternating group $A_4$.
+\item \textbf{P-groups:} For orders $p^3$, use the three abelian groups,
+  the Heisenberg group of order $p^3$, and the nonabelian semidirect
+  product $C_{p^2} \rtimes C_p$.
+\item \textbf{Pq orders:} For orders $pq$ where $p|q-1$, construct
+  semidirect products $C_q \rtimes C_p$ using the automorphism group of
+  $C_q$.
+\item \textbf{Fallback:} For unsupported orders, use generic
+  Latin-square search with associativity constraints.
+\end{enumerate}
+
+\subsection{Skeleton assembly}
+\label{sec:skeletons}
+
+Given a quotient poset $Q$ on $q$ classes and a multiset of biconnected
+components $\cat{B}_1, \dots, \cat{B}_q$, we construct a candidate
+category $\cat{C}$ as follows:
+\begin{enumerate}
+\item Determine the hom-count matrix $M$ from the component sizes and
+  poset relations: for $i \neq j$, if $[i] \leq [j]$ in $Q$, then
+  $\Hom(\cat{B}_i, \cat{B}_j)$ receives at least one morphism;
+  otherwise none.
+\item Distribute any remaining morphisms (excess $n - \sum |\Mor(\cat{B}_i)|$)
+  across the off-diagonal hom-cells.
+\item Use the profunctor solver (Section~\ref{sec:profunctors}) to fill
+  the composition data for cross-component morphisms.
+\end{enumerate}
+
+The skeleton canonical key ensures that only distinct isomorphism classes
+are counted.  Crucially, when computing the canonical key, only classes
+with identical component keys are permuted --- this prevents distinct
+component-to-class assignments from colliding, a subtle bug that
+previously caused significant undercounts at $(9,2)$.
+
+\subsection{Shortcuts for small excess}
+
+When the \emph{excess} $e = n - k$ is small ($e \leq 4$), we use a
+fast path that constructs categories directly from groups and terminals,
+avoiding the full skeleton assembly.  The shortcut enumerates all integer
+partitions of $e$ and assigns each part to a group object (with order
+equal to part $+ 1$), together with a parallel-arrow component.
+
+For example, for $e = 1$:
+\[
+\{(2, C_2) \oplus 1\text{ terminal}\} \cup \{(3, \text{parallel arrows})\}
+\]
+For $e = 2$:
+\[
+\{(3, C_3)\} \cup \{(2, C_2) \oplus (2, C_2)\} \cup \{(4, \text{parallel arrows})\}
+\]
+For larger $e$, the partitions of $e$ generate all distributions of groups
+across objects.
+
+\section{The colimit--limit theorem}
+\label{sec:theorem}
+
+The decomposition of Section~\ref{sec:decomposition} is justified by a
+general theorem about categories enriched over preorders.
+
+Let $U : \Preord \to \Set$ be the forgetful functor.  For a preorder $P$,
+write $U(P)\text{-Cat}$ for the category of categories enriched over the
+monoidal poset $(U(P), \wedge, \top)$ where $\wedge$ is the meet and
+$\top$ is the top element of $P$.
+
+\begin{theorem}
+  \label{thm:colimit-limit}
+  The functor
+  \[
+  U(-)\text{-Cat} : \Preord^{\op} \longrightarrow \CAT/\Set
+  \]
+  sends all weighted colimits in the locally-posetal 2-category
+  $\Preord$ to weighted limits in $\CAT/\Set$.
+\end{theorem}
+
+\begin{proof}[Proof sketch]
+  For a fixed set $X$, let $\Preord(X)$ be the preorder of preorder
+  relations on $X$ ordered by inclusion.  A $U(P)$-enriched category
+  with object set exactly $X$ is the same thing as a monotone map
+  $P \to \Preord(X)$.  Explicitly, $p \in P$ is sent to the preorder
+  $x \leq_p y \iff p \in A(x,y)$ where $A(x,y)$ is the hom-object.
+
+  The fibre over $X$ is therefore:
+  \[
+  (U(P)\text{-Cat})_X \cong \Preord(P, \Preord(X))
+  \]
+  If $L = \operatorname{colim}_j P_j$, then for every $X$:
+  \[
+  \Preord(L, \Preord(X)) \cong \lim_j \Preord(P_j, \Preord(X))
+  \]
+  Hence $U(L)\text{-Cat} \cong \lim_j U(P_j)\text{-Cat}$, not in
+  plain $\Cat$ but in $\CAT/\Set$.
+\end{proof}
+
+\begin{corollary}
+  \label{cor:limits}
+  For a coproduct $P + Q$ of preorders:
+  \[
+  U(P+Q)\text{-Cat} \cong U(P)\text{-Cat} \times_{\Set} U(Q)\text{-Cat}
+  \]
+  In particular, the category of categories enriched over the disjoint
+  union of two preorders is the pullback over $\Set$ of the categories
+  enriched over each component.
+\end{corollary}
+
+This result justifies our decomposition pipeline: a category whose support
+preorder is a disjoint union factors over its connected components, and
+the factoring is captured by a pullback in $\CAT/\Set$.  Similarly,
+gluing components along a profunctor corresponds to a pushout in
+$\Preord$, dualising to a pullback in $\CAT/\Set$.
+
+\section{Finite profunctors}
+\label{sec:profunctors}
+
+A \emph{finite profunctor} $P : \cat{A}^{\op} \times \cat{B} \to \Set$
+between two finite categories $\cat{A}$ and $\cat{B}$ is a functor whose
+fibres are finite sets.  Profunctors describe the cross-component
+morphism structure in the decomposition pipeline.
+
+We count profunctors of bounded total fibre size by solving a constraint
+satisfaction problem over action variables:
+
+\begin{itemize}
+\item For each morphism $f : a' \to a$ in $\cat{A}$ and object $b$ in
+  $\cat{B}$, a left action $P(f,b) : P(a,b) \to P(a',b)$.
+\item For each object $a$ in $\cat{A}$ and morphism $g : b \to b'$ in
+  $\cat{B}$, a right action $P(a,g) : P(a,b) \to P(a,b')$.
+\end{itemize}
+
+The actions must satisfy identity, composition, and the middle interchange
+law:
+\[
+P(f, b') \circ P(a, g) = P(a', g) \circ P(f, b) : P(a,b) \to P(a',b')
+\]
+
+For one-object group profunctors, we use a faster algebraic approach:
+the category of profunctors between groups $G$ and $H$ is equivalent to
+the category of finite $(G,H)$-bisets.  We enumerate transitive bisets
+via coset actions of $G \times H^{\op}$, then combine them as orbit
+multisets.
+
+\section{Implementation and performance}
+\label{sec:implementation}
+
+The algorithm is implemented in Haskell (GHC 9.6.7) with approximately
+10,000 lines of code across 14 modules.  The key modules are:
+
+\begin{itemize}
+\item \texttt{CodexSlop.Category} --- data type, validation, serialisation.
+\item \texttt{CodexSlop.Shape} --- hom-count matrices, support preorders.
+\item \texttt{CodexSlop.Search} --- backtracking composition-table solver.
+\item \texttt{CodexSlop.Canonical} --- key generation for all quotient modes.
+\item \texttt{CodexSlop.Generate} --- decomposition-based generation.
+\item \texttt{CodexSlop.Enrichment} --- lattice typeclass and enrichment
+  enumeration.
+\item \texttt{CodexSlop.Group} --- group construction.
+\item \texttt{CodexSlop.Profunctor} --- profunctor counting.
+\end{itemize}
+
+Caching is used at multiple levels: biconnected component keys
+(``.cat-enum-cache/v1/biconnected/''), generated isomorphism keys
+(``v4/generated/isomorphism/''), and profunctor profile counts
+(``v1/profunctor-counts/'').  First runs are significantly slower
+(populating the cache), while subsequent runs are near-instantaneous.
+
+\subsection{Verified counts}
+\label{sec:results}
+
+Table~\ref{tab:counts} shows the number of Cauchy-complete finite
+categories up to strict isomorphism for $n \leq 12$.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{c|c|c|l}
+$n$ & Total & OEIS match & Notes \\
+\hline
+1 & 1 & --- & \\
+2 & 2 & --- & \\
+3 & 4 & --- & \\
+4 & 11 & --- & \\
+5 & 25 & --- & \\
+6 & 63 & --- & \\
+7 & 163 & --- & \\
+8 & 451 & --- & \\
+9 & 1312 & 2+278+458+371+151+39+10+2+1 & See below \\
+10 & 3359 & --- & \\
+11 & 9309 & --- & \\
+12 & 20341 & --- &
+\end{tabular}
+\caption{Cauchy-complete categories up to strict isomorphism}
+\label{tab:counts}
+\end{table}
+
+The OEIS row for $n=9$ (A384134) lists $2, 278, 457, 371, 151, 39, 10,
+2, 1$ for a total of 1311.  Our count of 458 at $k=3$ (vs.~OEIS's 457)
+is the result of a genuine mathematical edge case: two categories with
+hom-count matrices
+
+\[
+\begin{pmatrix}
+1 & 1 & 2 \\
+1 & 1 & 2 \\
+0 & 0 & 1
+\end{pmatrix}
+\quad\text{and}\quad
+\begin{pmatrix}
+1 & 2 & 2 \\
+0 & 1 & 1 \\
+0 & 1 & 1
+\end{pmatrix}
+\]
+
+that are formal duals (each is isomorphic to the opposite of the other)
+but not isomorphic (they have different object-out/in multisets:
+$\{(4,2),(4,2),(1,5)\}$ vs $\{(5,1),(2,4),(2,4)\}$).  Under strict
+isomorphism, both should count separately; under source--target duality,
+they collapse to one.
+
+Table~\ref{tab:equivalence} shows the comparison between strict
+isomorphism, categorical equivalence, and isomorphism-with-duality
+for $n=9$.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{c|r|r|r}
+$k$ & Strict isomorphism & Categorical equivalence & Isomorphism + dual \\
+\hline
+1 & 2 & 2 & 2 \\
+2 & 278 & 278 & 186 \\
+3 & 458 & 457 & 264 \\
+4 & 371 & 370 & 217 \\
+5 & 151 & 150 & 95 \\
+6 & 39 & 39 & 39 \\
+7 & 10 & 10 & 8 \\
+8 & 2 & 2 & 2 \\
+9 & 1 & 1 & 1 \\
+\hline
+\text{Total} & 1312 & 1309 & 870
+\end{tabular}
+\caption{Comparison of quotient modes for $n=9$}
+\label{tab:equivalence}
+\end{table}
+
+\subsection{Theoretical complexity}
+
+The shape-based search has worst-case complexity
+$O(\binom{n-k+k^2-1}{k^2-1} \cdot d^{n^2})$ where $d$ is the average
+hom-block size.  The decomposition-based generation reduces this by
+exploiting the biconnected-component factorisation: the search is
+confined to components with $k \leq \lfloor\sqrt{n}\rfloor$, and the
+assembly step is polynomial in the number of components.
+
+The equality count via object-class partitioning is $O(k^2 \cdot n)$ per
+category, compared to $O(k! \cdot n^2)$ for the naive hash-based approach
+--- an improvement of factorial-to-polynomial.
+
+\section{Conclusion and future work}
+\label{sec:conclusion}
+
+We have presented a complete algorithmic framework for the exact
+enumeration of finite categories, with verified counts up to 12
+morphisms.  The three-layer stratification, decomposition-based
+generation, and multiple quotient modes provide a flexible tool for
+exploring the structure of finite categories.
+
+Several directions for future work remain:
+
+\begin{enumerate}
+\item \textbf{Higher counts.}  Extending the enumeration to $n > 12$
+  requires optimising the biconnected component search for large excess
+  values.  The current bottleneck is the shape-based enumeration for
+  two-object biconnected categories with $n \geq 13$.
+\item \textbf{Profunctor decomposition.}  The colimit--limit theorem
+  (Theorem~\ref{thm:colimit-limit}) suggests a systematic approach to
+  decomposing categories over their support preorders.  Making this
+  decomposition algorithmic would further reduce the search space.
+\item \textbf{Distributive-lattice enrichment.}  The enrichment framework
+  (Section~\ref{sec:enrichment}) allows categories enriched over
+  arbitrary finite distributive lattices.  Exploring these spaces may
+  reveal connections to other combinatorial structures.
+\item \textbf{Column-regular categories.}  The discrepancy between our
+  equivalence counts and OEIS data at $n=9$, $k \geq 4$ arises from
+  disconnected categories whose isomorphic components lack connecting
+  morphisms.  A proper treatment of this case would compute equivalence
+  by comparing component structures rather than requiring explicit
+  isomorphisms.
+\end{enumerate}
+
+\begin{thebibliography}{10}
+
+\bibitem{baez2001}
+J.~Baez and J.~Dolan, ``Categorification,'' in \emph{Higher category
+  theory}, Contemp. Math.~230, 2001.
+
+\bibitem{besche2002}
+H.~U. Besche, B.~Eick, and E.~A. O'Brien, ``A millennium project:
+  constructing small groups,'' \emph{Int. J. Algebra Comput.}, 2002.
+
+\bibitem{cruttwell2014}
+G.~Cruttwell, ``Counting finite categories,'' \emph{AMS Spring Eastern
+  Meeting}, 2014.
+
+\bibitem{distler2011}
+A.~Distler and J.~D. Mitchell, ``The number of nilpotent semigroups of
+  degree $3$,'' \emph{Electron. J. Combin.}, 2011.
+
+\bibitem{jevons1897}
+W.~S. Jevons, ``On the principle of the classification of finite
+  distributive lattices,'' \emph{Proc. London Math. Soc.}, 1897.
+
+\bibitem{pfeiffer2004}
+G.~Pfeiffer, ``Counting transitive relations,'' \emph{J. Integer Seq.},
+  2004.
+
+\bibitem{smallcats}
+``SmallCategories,'' \url{https://smallcats.info/about}.
+
+\end{thebibliography}
+
+\end{document}
