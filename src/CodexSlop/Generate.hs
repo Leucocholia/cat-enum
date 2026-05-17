@@ -283,14 +283,17 @@ generatedCategoriesForObjectCount n objectCount cauchyOnly =
     ]
 
 generatedCategoriesForObjectCountCached :: Int -> Int -> Bool -> IO [FiniteCategory]
-generatedCategoriesForObjectCountCached n objectCount cauchyOnly = do
-  skeletons <- uniqueSkeletons <$> generatedSkeletonsCached n objectCount cauchyOnly
-  pure
-    ( concat
-        [ runSkeleton cauchyOnly skeleton
-        | skeleton <- skeletons
-        ]
-    )
+generatedCategoriesForObjectCountCached n objectCount cauchyOnly
+  | n < objectCount               = pure []  -- impossible
+  | n <= 2 * objectCount - 2      = pure []  -- below connected threshold; shortcut covers all
+  | otherwise = do
+      skeletons <- uniqueSkeletons <$> generatedSkeletonsCached n objectCount cauchyOnly
+      pure
+        ( concat
+            [ runSkeleton cauchyOnly skeleton
+            | skeleton <- skeletons
+            ]
+        )
 
 generatedSkeletons :: Int -> Int -> Bool -> [GeneratedSkeleton]
 generatedSkeletons n objectCount cauchyOnly =
