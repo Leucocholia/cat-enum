@@ -1,6 +1,7 @@
 module CodexSlop.Canonical
   ( allEqualityKeys
   , canonicalKey
+  , dualKey
   , equalityCount
   , equivalenceKey
   , RepresentativeMode(..)
@@ -31,6 +32,26 @@ representativeKey :: RepresentativeMode -> FiniteCategory -> String
 representativeKey UpToEquivalence = equivalenceKey
 representativeKey UpToIsomorphism = canonicalKey
 representativeKey UpToEquality = categoryKey
+
+-- | Quotient by source-target duality: identify C with C^op.
+-- The key for C is the minimum of the keys of C and its opposite.
+dualKey :: RepresentativeMode -> FiniteCategory -> String
+dualKey mode cat = min (representativeKey mode cat) (representativeKey mode (oppositeCategory cat))
+
+-- | The opposite category: swap sources/targets, reverse composition order.
+oppositeCategory :: FiniteCategory -> FiniteCategory
+oppositeCategory cat =
+  FiniteCategory
+    { fcMorphismCount = n
+    , fcObjectCount   = fcObjectCount cat
+    , fcSources       = fcTargets cat
+    , fcTargets       = fcSources cat
+    , fcIdentities    = fcIdentities cat
+    , fcCompose       = V.generate (n * n) (\idx ->
+        let (f, g) = idx `divMod` n
+        in composeAt cat g f)
+    }
+  where n = fcMorphismCount cat
 
 allEqualityKeys :: FiniteCategory -> Set.Set String
 allEqualityKeys cat

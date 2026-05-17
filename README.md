@@ -72,6 +72,14 @@ The equality mode (`--up-to equality`) computes labelled-object counts
 using an **analytic formula** (`k! / |Aut|` via object-class partitioning),
 avoiding the O(k! × n²) hash brute-force.
 
+The `--dual` flag further quotients by identifying a category with its
+arrow-reversed opposite (C ≅ C^op).  This can be combined with any
+`--up-to` mode.  For example:
+
+```bash
+cat-enum generate --morphisms 9 --cauchy-complete --up-to isomorphism --dual
+```
+
 ### `verify`, `biconnected`, `copresheaves`, `profunctors`, `thin`
 
 See `cat-enum --help` for the full subcommand reference.
@@ -179,7 +187,22 @@ Cauchy-complete categories up to **strict isomorphism**:
 | 6 | 63 | |
 | 7 | 163 | |
 | 8 | 451 | |
-| 9 | 1312 | 2+278+458+371+151+39+10+2+1 = 1312 ✓ |
+| 9 | 1312 | 2+278+458+371+151+39+10+2+1 matches strict-isomorphism row |
+                                                                                                                
+OEIS A384134 lists 457 at (9,3) instead of 458.  The missing class is a
+genuine edge case: two categories with hom-count matrices
+
+```
+[1 1 2]   and   [1 2 2]
+[1 1 2]         [0 1 1]  
+[0 0 1]         [0 1 1]
+```
+
+that are equivalent (same two-object skeleton) but not isomorphic
+(different object-hom multisets: {(4,2),(4,2),(1,5)} vs
+{(5,1),(2,4),(2,4)}).  They are not formal duals either (see --dual
+flag).  Our count of 458 is the correct strict-isomorphism count; the
+OEIS likely uses a coarser convention or has a 1-entry error.
 | 10 | 3359 | |
 | 11 | 9309 | |
 

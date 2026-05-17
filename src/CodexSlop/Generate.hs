@@ -9,7 +9,8 @@ module CodexSlop.Generate
   ) where
 
 import CodexSlop.Biconnected
-import CodexSlop.Canonical (RepresentativeMode(..), allEqualityKeys, equalityCount, representativeKey, representativeModeName)
+ -- add to import
+import CodexSlop.Canonical (RepresentativeMode(..), allEqualityKeys, dualKey, equalityCount, representativeKey, representativeModeName)
 import CodexSlop.Category
 import CodexSlop.Decompose (disjointUnionCategory, isConnectedCategory)
 import CodexSlop.Group (finiteGroupCategories)
@@ -71,10 +72,10 @@ componentGeneratedKeysWith mode n objectFilter cauchyOnly =
 
 componentGeneratedKeysCached :: Int -> Maybe Int -> Bool -> IO [(Int, Set.Set String)]
 componentGeneratedKeysCached n objectFilter cauchyOnly = do
-  componentGeneratedKeysCachedWith (defaultGeneratedMode cauchyOnly) n objectFilter cauchyOnly
+  componentGeneratedKeysCachedWith False (defaultGeneratedMode cauchyOnly) n objectFilter cauchyOnly
 
-componentGeneratedKeysCachedWith :: RepresentativeMode -> Int -> Maybe Int -> Bool -> IO [(Int, Set.Set String)]
-componentGeneratedKeysCachedWith mode n objectFilter cauchyOnly = do
+componentGeneratedKeysCachedWith :: Bool -> RepresentativeMode -> Int -> Maybe Int -> Bool -> IO [(Int, Set.Set String)]
+componentGeneratedKeysCachedWith dual mode n objectFilter cauchyOnly = do
   let requestedObjects = maybe [1 .. n] (:[]) objectFilter
       requestedSmallExtras =
         [ n - k
@@ -88,19 +89,20 @@ componentGeneratedKeysCachedWith mode n objectFilter cauchyOnly = do
       else pure []
   groups <-
     forM requestedObjects $ \k -> do
-      keys <- cachedGeneratedKeys mode n k cauchyOnly (computeKeys smallExtraBlocks k)
+      keys <- cachedGeneratedKeys mode n k cauchyOnly (computeKeys dual smallExtraBlocks k)
       pure (k, keys)
   pure [(k, keys) | (k, keys) <- groups, not (Set.null keys)]
   where
-    computeKeys smallExtraBlocks k
+    repKey kf = if dual then dualKey kf else representativeKey kf
+    computeKeys dual' smallExtraBlocks k
       | mode == UpToEquality = do
-          isoKeys <- cachedGeneratedKeys UpToIsomorphism n k cauchyOnly (isoComputeKeysForMode UpToIsomorphism smallExtraBlocks k)
+          isoKeys <- cachedGeneratedKeys UpToIsomorphism n k cauchyOnly (isoComputeKeysForMode dual' UpToIsomorphism smallExtraBlocks k)
           let cats = [cat | key <- Set.toAscList isoKeys, Right cat <- [parseCategoryKey key]]
           pure (Set.unions (map allEqualityKeys cats))
-      | otherwise = isoComputeKeysForMode mode smallExtraBlocks k
+      | otherwise = isoComputeKeysForMode dual' mode smallExtraBlocks k
 
-    isoComputeKeysForMode :: RepresentativeMode -> [ConnectedBlock] -> Int -> IO (Set.Set String)
-    isoComputeKeysForMode repMode smallExtraBlocks k = do
+    isoComputeKeysForMode :: Bool -> RepresentativeMode -> [ConnectedBlock] -> Int -> IO (Set.Set String)
+    isoComputeKeysForMode dual' repMode smallExtraBlocks k = do
       shortcut <- case smallExtraCauchyKeys repMode n k cauchyOnly of
                     Just keys -> pure keys
                     Nothing   -> pure Set.empty
@@ -108,11 +110,12 @@ componentGeneratedKeysCachedWith mode n objectFilter cauchyOnly = do
                 Just keys -> pure keys
                 Nothing   -> do
                   cats <- generatedCategoriesForObjectCountCached n k cauchyOnly
-                  pure (Set.fromList [representativeKey repMode cat | cat <- cats, not cauchyOnly || isCauchyComplete cat])
+                  let keyFn = if dual' then dualKey repMode else representativeKey repMode
+                  pure (Set.fromList [keyFn cat | cat <- cats, not cauchyOnly || isCauchyComplete cat])
       pure (Set.union shortcut full)
 
-equalityGeneratedCounts :: Int -> Maybe Int -> Bool -> IO [(Int, Int)]
-equalityGeneratedCounts n objectFilter cauchyOnly = do
+equalityGeneratedCounts :: Bool -> Int -> Maybe Int -> Bool -> IO [(Int, Int)]
+equalityGeneratedCounts dual n objectFilter cauchyOnly = do
   let requestedObjects = maybe [1 .. n] (:[]) objectFilter
   forM requestedObjects $ \k -> do
     isoKeys <- cachedGeneratedKeys UpToIsomorphism n k cauchyOnly (isoComputeForCounts n k cauchyOnly)

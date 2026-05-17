@@ -79,6 +79,7 @@ data GenerateOptions = GenerateOptions
   , genCauchyComplete :: !Bool
   , genWriteReps :: !(Maybe FilePath)
   , genRepresentativeMode :: !RepresentativeMode
+  , genDual :: !Bool
   } deriving (Eq, Show)
 
 data ProfunctorOptions = ProfunctorOptions
@@ -172,6 +173,7 @@ generateParser =
     <*> switch (long "cauchy-complete" <> help "Generate only Cauchy-complete categories")
     <*> optional (strOption (long "write-reps" <> metavar "DIR" <> help "Write representative keys"))
     <*> representativeModeParser
+    <*> switch (long "dual" <> help "Identify categories with their opposites (C ≅ C^op)")
 
 representativeModeParser :: Parser RepresentativeMode
 representativeModeParser =
@@ -395,18 +397,19 @@ runGenerate options = do
       objFilter = genObjects options
       cauchyOnly = genCauchyComplete options
       writeReps = genWriteReps options
+      dual = genDual options
   maybe (pure ()) (createDirectoryIfMissing True) writeReps
   case mode of
     UpToEquality -> do
-      counts <- equalityGeneratedCounts n objFilter cauchyOnly
+      counts <- equalityGeneratedCounts dual n objFilter cauchyOnly
       let total = sum (map snd counts)
-      putStrLn (show n ++ " morphisms: " ++ show total ++ label mode cauchyOnly)
+      putStrLn (show n ++ " morphisms: " ++ show total ++ label mode cauchyOnly dual)
       forM_ counts $ \(k, count) -> do
         putStrLn ("  " ++ show k ++ " objects: " ++ show count)
     _ -> do
-      groups <- componentGeneratedKeysCachedWith mode n objFilter cauchyOnly
+      groups <- componentGeneratedKeysCachedWith dual mode n objFilter cauchyOnly
       let total = sum (map (Set.size . snd) groups)
-      putStrLn (show n ++ " morphisms: " ++ show total ++ label mode cauchyOnly)
+      putStrLn (show n ++ " morphisms: " ++ show total ++ label mode cauchyOnly dual)
       forM_ groups $ \(k, keys) -> do
         putStrLn ("  " ++ show k ++ " objects: " ++ show (Set.size keys))
         forM_ writeReps $ \dir -> do
@@ -417,13 +420,14 @@ runGenerate options = do
                   ++ show k
                   ++ "-up-to-"
                   ++ representativeModeName mode
+                  ++ (if dual then "-dual" else "")
                   ++ ".cats"
           writeFile (dir </> fileName) (unlines (Set.toAscList keys))
   where
-    label mode cauchyOnly =
-      if cauchyOnly
-        then " generated Cauchy-complete categories up to " ++ representativeModeName mode
-        else " generated categories up to " ++ representativeModeName mode
+    label mode cauchyOnly dual =
+      let base = if cauchyOnly then " Cauchy-complete" else ""
+          rel = representativeModeName mode ++ (if dual then " and dual" else "")
+      in base ++ " generated categories up to " ++ rel
 
 runProfunctors :: ProfunctorOptions -> IO ()
 runProfunctors options = do
