@@ -12,7 +12,7 @@ import CodexSlop.Biconnected
  -- add to import
 import CodexSlop.Canonical (RepresentativeMode(..), allEqualityKeys, dualKey, equalityCount, representativeKey, representativeModeName)
 import CodexSlop.Category
-import CodexSlop.Decompose (disjointUnionCategory)
+import CodexSlop.Decompose (disjointUnionCategory, isConnectedCategory)
 import CodexSlop.Group (finiteGroupCategories)
 import CodexSlop.Profunctor
 import CodexSlop.Search
@@ -20,11 +20,13 @@ import CodexSlop.Shape
 
 import Control.Monad (forM, unless)
 import Data.Function (on)
+import Data.IORef (IORef, newIORef, readIORef, modifyIORef)
 import Data.List (groupBy, intercalate, permutations, sort, sortBy)
 import qualified Data.Set as Set
 import qualified Data.Vector as V
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
+import System.IO.Unsafe (unsafePerformIO)
 
 data GeneratedSkeleton = GeneratedSkeleton
   { gsPoset :: !SupportPreorder
@@ -284,16 +286,76 @@ generatedCategoriesForObjectCount n objectCount cauchyOnly =
 
 generatedCategoriesForObjectCountCached :: Int -> Int -> Bool -> IO [FiniteCategory]
 generatedCategoriesForObjectCountCached n objectCount cauchyOnly
-  | n < objectCount               = pure []  -- impossible
-  | n <= 2 * objectCount - 2      = pure []  -- below connected threshold; shortcut covers all
+  | n < objectCount = pure []
+  | n <= 2 * objectCount - 2 = do
+      -- All categories are disconnected; build via DP from smaller connected components
+      table <- dpAllCached n cauchyOnly
+      pure (table !! n !! objectCount)
   | otherwise = do
-      skeletons <- uniqueSkeletons <$> generatedSkeletonsCached n objectCount cauchyOnly
-      pure
-        ( concat
-            [ runSkeleton cauchyOnly skeleton
-            | skeleton <- skeletons
-            ]
-        )
+      table <- dpAllCached n cauchyOnly
+      let result = table !! n !! objectCount
+      if null result
+        then do
+          -- DP missed something; fall back to full skeleton search
+          skeletons <- uniqueSkeletons <$> generatedSkeletonsCached n objectCount cauchyOnly
+          pure (concat [runSkeleton cauchyOnly s | s <- skeletons])
+        else pure result
+
+-- | Connected categories from skeletons (cached separately).
+generatedConnectedCached :: Int -> Int -> Bool -> IO [FiniteCategory]
+generatedConnectedCached n objectCount cauchyOnly = do
+  skeletons <- uniqueSkeletons <$> generatedSkeletonsCached n objectCount cauchyOnly
+  pure (filter isConnectedCategory (concatMap (runSkeleton cauchyOnly) skeletons))
+
+-- | DP table: all[n][k] = connected[n][k] ∪ Σ smaller connected × all.
+-- Memoised per (maxN, cauchyOnly).
+{-# NOINLINE dpAllCacheRef #-}
+dpAllCacheRef :: IORef [((Int, Bool), [[[FiniteCategory]]])]
+dpAllCacheRef = unsafePerformIO (newIORef [])
+
+dpAllCached :: Int -> Bool -> IO [[[FiniteCategory]]]
+dpAllCached maxN cauchyOnly = do
+  cache <- readIORef dpAllCacheRef
+  case lookup (maxN, cauchyOnly) cache of
+    Just table -> pure table
+    Nothing -> do
+      table <- buildDPTable maxN cauchyOnly
+      modifyIORef dpAllCacheRef (((maxN, cauchyOnly), table) :)
+      pure table
+
+buildDPTable :: Int -> Bool -> IO [[[FiniteCategory]]]
+buildDPTable maxN cauchyOnly = do
+  -- Step 1: connected categories via skeletons (only for n ≥ 2k-1)
+  connTable <- forM [0 .. maxN] $ \n ->
+    forM [0 .. n] $ \k -> do
+      if k == 0 then pure []
+      else if n < k then pure []
+      else if n <= 2 * k - 2 then pure []
+      else generatedConnectedCached n k cauchyOnly
+
+  -- Step 2: DP convolution
+  -- all[n][k] = connected[n][k] ∪ ⋃ conn[n'][k'] × all[n-n'][k-k']
+  let allTable = table
+      table = [[ cell n k | k <- [0 .. n] ] | n <- [0 .. maxN] ]
+      cell 0 0 = []
+      cell n k
+        | k <= 0 || k > n = []
+        | otherwise =
+            let connected = connTable !! n !! k
+                glued = [ disjointUnionCategory [conn, rest]
+                        | n1 <- [1 .. n - 1]
+                        , k1 <- [1 .. min k n1]
+                        , let conns = connTable !! n1 !! k1
+                        , not (null conns)
+                        , conn <- conns
+                        , let n2 = n - n1
+                        , let k2 = k - k1
+                        , k2 >= 0
+                        , k2 <= n2
+                        , rest <- table !! n2 !! k2
+                        ]
+            in connected ++ glued
+  pure allTable
 
 generatedSkeletons :: Int -> Int -> Bool -> [GeneratedSkeleton]
 generatedSkeletons n objectCount cauchyOnly =
