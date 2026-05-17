@@ -110,13 +110,19 @@ cachedBiconnectedKeys cauchyOnly n k
       createDirectoryIfMissing True biconnectedCacheDir
       exists <- doesFileExist path
       if exists
-        then readCacheFile path
-        else do
-          let keys = biconnectedKeys cauchyOnly n k
-          writeFile path (unlines (Set.toAscList keys))
-          pure keys
+        then do
+          contents <- readFile path
+          let keys = Set.fromList (filter (not . null) (lines contents))
+          if Set.null keys then recompute else pure keys
+        else recompute
   where
     path = biconnectedCacheFile cauchyOnly n k
+    recompute = do
+      let keys = biconnectedKeys cauchyOnly n k
+      if not (Set.null keys)
+        then writeFile path (unlines (Set.toAscList keys))
+        else pure ()
+      pure keys
 
 biconnectedCacheDir :: FilePath
 biconnectedCacheDir =
